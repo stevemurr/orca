@@ -24,13 +24,9 @@ from orca.app.actions import (
     ThreadLoaded,
     ThreadSelected,
     ViewportChanged,
-    WorkGraphLoaded,
-    WorkGraphUnavailable,
-    WorkSelectionMoved,
 )
 from orca.app.model import AppState, ViewId
 from orca.app.update import (
-    DiscoverWorkGraph,
     Effect,
     ExitApplication,
     FollowRun,
@@ -50,7 +46,7 @@ from orca.tui.render import (
     render_interaction,
 )
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
-from orca.tui.views import AgentsView, ConversationView, InspectorView, ReviewView
+from orca.tui.views import ConversationView, InspectorView, ReviewView
 from orca.tui.views.base import RenderedView
 from orca.tui.widgets import Composer
 
@@ -95,10 +91,6 @@ class OrcaApp(App[None]):
         scrollbar-color: $surface-lighten-2;
         scrollbar-color-hover: $primary;
         background: $background;
-    }
-
-    AgentsView:focus {
-        border: none;
     }
 
     #interaction {
@@ -216,7 +208,6 @@ class OrcaApp(App[None]):
             yield Static(id="app-header")
             with ContentSwitcher(initial=ViewId.CONVERSATION.value, id="view-host"):
                 yield ConversationView(id=ViewId.CONVERSATION.value, classes="main-view")
-                yield AgentsView(id=ViewId.AGENTS.value, classes="main-view")
                 yield ReviewView(id=ViewId.REVIEW.value, classes="main-view")
                 yield InspectorView(id=ViewId.INSPECTOR.value, classes="main-view")
             yield Static(id="interaction")
@@ -246,11 +237,10 @@ class OrcaApp(App[None]):
         self.apply_model_action(ViewportChanged(event.size.width, event.size.height))
 
     def apply_model_action(self, action) -> None:  # type: ignore[no-untyped-def]
-        previous_view = self.model.view
         transition = reduce(self.model, action)
         self.model = transition.state
         if self.is_mounted and not isinstance(action, ComposerChanged):
-            self._render_model(focus_view=previous_view is not self.model.view)
+            self._render_model()
         for effect in transition.effects:
             self._perform(effect)
 
@@ -274,10 +264,6 @@ class OrcaApp(App[None]):
         if composer.text != self.model.composer_draft:
             self.apply_model_action(ComposerChanged(composer.text))
 
-    @on(AgentsView.SelectionMoved)
-    def work_selection_moved(self, message: AgentsView.SelectionMoved) -> None:
-        self.apply_model_action(WorkSelectionMoved(message.delta))
-
     def action_context_escape(self) -> None:
         if isinstance(self.screen, (HelpScreen, ApprovalScreen)):
             return
@@ -290,7 +276,7 @@ class OrcaApp(App[None]):
     def action_quit(self) -> None:
         self.apply_model_action(CommandInvoked("quit"))
 
-    def _render_model(self, *, focus_view: bool = False) -> None:
+    def _render_model(self) -> None:
         width = max(1, self.model.viewport_width)
         self.query_one("#app-header", Static).update(render_header(self.model, width=width))
         host = self.query_one("#view-host", ContentSwitcher)
@@ -320,13 +306,6 @@ class OrcaApp(App[None]):
         self.query_one("#app-footer", Static).update(render_footer(self.model))
         self._sync_approval()
 
-        if (
-            focus_view
-            and self.model.view is ViewId.AGENTS
-            and not isinstance(self.screen, ApprovalScreen)
-        ):
-            self.query_one(AgentsView).focus()
-
     def _sync_approval(self) -> None:
         interaction = self.model.interaction
         if interaction is not None and interaction.kind == "approval":
@@ -352,14 +331,6 @@ class OrcaApp(App[None]):
                 self._send_command(effect),
                 name=f"command:{effect.command}",
                 group="commands",
-                exit_on_error=False,
-            )
-        elif isinstance(effect, DiscoverWorkGraph):
-            self.run_worker(
-                self._load_work_graph(effect),
-                name=f"work-graph:{effect.run_id}",
-                group=f"work-graph:{effect.run_id}",
-                exclusive=True,
                 exit_on_error=False,
             )
         elif isinstance(effect, OpenHelp):
@@ -468,16 +439,6 @@ class OrcaApp(App[None]):
             self.apply_model_action(OperationFailed(str(exc)))
             return
         self.apply_model_action(CommandCompleted(effect.command, response))
-
-    async def _load_work_graph(self, effect: DiscoverWorkGraph) -> None:
-        try:
-            graph = await self.backend.load_work_graph(effect.run_id, effect.artifact_id)
-        except BackendError as exc:
-            self.apply_model_action(WorkGraphUnavailable(effect.run_id, str(exc)))
-            return
-        self.apply_model_action(
-            WorkGraphLoaded(effect.run_id, graph.units, graph.graph_fingerprint)
-        )
 
     async def _switch_workspace(self, selector: str) -> None:
         try:

@@ -15,12 +15,8 @@ from orca.app.model import (
     RunStatus,
     TurnState,
     ViewId,
-    WorkMapState,
-    WorkStatus,
-    WorkUnitState,
 )
 from orca.tui.render import (
-    render_agents,
     render_conversation,
     render_footer,
     render_header,
@@ -36,70 +32,29 @@ def plain(renderable: object, *, width: int) -> str:
 
 
 def populated_state() -> AppState:
-    units = (
-        WorkUnitState(
-            "contract",
-            "Map the public Task API contract",
-            "foundation",
-            status=WorkStatus.COMPLETED,
-            tool_ids=("tool-1",),
-        ),
-        WorkUnitState(
-            "shell",
-            "Build the state-driven terminal shell",
-            "feature",
-            depends_on=("contract",),
-            status=WorkStatus.ACTIVE,
-            progress="Building the terminal shell.",
-            active_tool="workspace.write_file",
-        ),
-        WorkUnitState(
-            "agents",
-            "Render the agent work map",
-            "feature",
-            depends_on=("contract",),
-            status=WorkStatus.WAITING,
-        ),
-        WorkUnitState(
-            "integrate",
-            "Integrate and verify the interface",
-            "integration",
-            depends_on=("shell", "agents"),
-            status=WorkStatus.WAITING,
-        ),
-    )
     return AppState(
         booting=False,
         connected=True,
         endpoint="http://127.0.0.1:8420",
-        workspace_path="~/Code/orchestrator",
+        workspace_path="~/Code/orca",
         run_status=RunStatus.RUNNING,
         turns=(
             TurnState(
                 "run-1",
                 request="Build a polished terminal interface",
-                progress=(
-                    ProgressItem("work:shell", "Building the terminal shell.", "active", "shell"),
-                ),
+                progress=(ProgressItem("shell", "Building the terminal shell.", "active"),),
                 provisional_answer="The view architecture is taking shape.",
             ),
         ),
         active_run_id="run-1",
-        work=WorkMapState(
-            run_id="run-1",
-            units=units,
-            selected_unit_id="shell",
-            graph_loaded=True,
-            graph_requested=True,
-        ),
     )
 
 
 def test_header_stays_quiet_and_names_exact_context() -> None:
     rendered = plain(render_header(populated_state(), width=100), width=100)
 
-    assert "orchestrator" in rendered
-    assert "~/Code/orchestrator" in rendered
+    assert "orca" in rendered
+    assert "~/Code/orca" in rendered
     assert "running" in rendered
 
 
@@ -110,58 +65,6 @@ def test_conversation_preserves_semantic_order() -> None:
     progress = rendered.index("Building the terminal shell")
     answer = rendered.index("The view architecture is taking shape")
     assert request < progress < answer
-
-
-def test_agents_view_is_rich_at_wide_width_and_collapses_cleanly() -> None:
-    state = replace(populated_state(), view_stack=(ViewId.CONVERSATION, ViewId.AGENTS))
-
-    wide = plain(render_agents(state, width=140), width=140)
-    narrow = plain(render_agents(state, width=64), width=64)
-
-    assert "AGENTS" in wide
-    assert "WORK MAP" in wide
-    assert "DETAIL" in wide
-    assert "Build the state-driven terminal" in wide
-    assert "workspace.write_file" in wide
-    assert "Work map" in narrow
-    assert "Integrate and verify" in narrow
-    assert len(max(narrow.splitlines(), key=len)) <= 64
-
-
-def test_narrow_work_map_prioritizes_objectives_over_long_agent_ids() -> None:
-    state = populated_state()
-    units = tuple(
-        replace(unit, agent_id="agent-01M18KBS811X9Q81D12FYRB4RQ") for unit in state.work.units
-    )
-    state = replace(state, work=replace(state.work, units=units))
-
-    rendered = plain(render_agents(state, width=40), width=40)
-    normalized = " ".join(rendered.split())
-
-    assert "Map the public Task API contract" in normalized
-    assert "Build the state-driven terminal shell" in normalized
-    assert "agent-01M18KBS811X9Q81D12FYRB4RQ" not in rendered
-
-
-def test_wide_work_map_wraps_large_parallel_ranks_into_readable_cards() -> None:
-    units = tuple(
-        WorkUnitState(f"unit-{index}", f"Parallel rendering task {index}", "feature")
-        for index in range(20)
-    )
-    state = replace(
-        populated_state(),
-        work=WorkMapState(
-            run_id="run-many",
-            units=units,
-            selected_unit_id="unit-0",
-        ),
-    )
-
-    rendered = plain(render_agents(state, width=153), width=153)
-
-    assert rendered.count("Parallel rendering task 0") >= 3
-    assert rendered.count("Parallel rendering task 19") >= 2
-    assert "╭─╮" not in rendered
 
 
 def test_footer_stays_on_one_line_at_every_viewport_width() -> None:

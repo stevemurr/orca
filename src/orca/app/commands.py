@@ -20,7 +20,6 @@ class ParsedCommand:
 
 
 COMMANDS: tuple[CommandSpec, ...] = (
-    CommandSpec("agents", "open the live agent work map"),
     CommandSpec("chat", "return to the conversation"),
     CommandSpec("review", "inspect the result and artifacts"),
     CommandSpec("threads", "browse recent conversations"),

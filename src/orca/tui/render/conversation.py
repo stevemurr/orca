@@ -13,7 +13,6 @@ from rich.text import Text
 from orca.app.model import AppState, Notice, TurnState
 from orca.tui.render.markdown import answer_markdown
 from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNING
-from orca.tui.render.work_map import work_summary
 
 
 def render_conversation(state: AppState, *, width: int) -> RenderableType:
@@ -87,8 +86,6 @@ def render_review(state: AppState, *, width: int) -> RenderableType:
         for artifact in turn.artifacts:
             artifacts.add_row(artifact.kind, artifact.reference or artifact.artifact_id)
         rows.append(artifacts)
-    if state.work.units:
-        rows.extend((Text(""), Text("WORK", style=f"bold {MUTED}"), work_summary(state.work.units)))
     return Group(*rows)
 
 
@@ -142,7 +139,7 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
         padding=(0, 1),
         width=max(1, width),
     )
-    tip = Text.assemble(("Tip: ", MUTED), ("/agents", ACCENT), (" opens the work map", MUTED))
+    tip = Text.assemble(("Tip: ", MUTED), ("/help", ACCENT), (" lists every command", MUTED))
     return [panel, tip]
 
 

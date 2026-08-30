@@ -13,16 +13,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-import orjson
-
-from orca.app.model import TaskEvent, ThreadReplay, WorkUnitSpec
+from orca.app.model import TaskEvent, ThreadReplay
 from orca.backend import (
     BackendError,
     BootInfo,
     RunInfo,
     RunRequest,
     ThreadHistoryInfo,
-    WorkGraphInfo,
 )
 from orca.client import ApiError, HttpApiClient, SSEEvent
 from orca.connection import Connection
@@ -58,10 +55,6 @@ class _BackendHttpClient(Protocol):
     ) -> AsyncIterator[SSEEvent]: ...
 
     async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]: ...
-
-    async def list_artifacts(self, run_id: str) -> list[dict[str, Any]]: ...
-
-    async def download_artifact(self, artifact_id: str) -> bytes: ...
 
     async def list_threads(self, **params: Any) -> dict[str, Any]: ...
 
@@ -189,56 +182,6 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
         return cast(dict[str, object], response)
 
-    async def load_work_graph(
-        self,
-        run_id: str,
-        artifact_id: str = "",
-    ) -> WorkGraphInfo:
-        try:
-            selected_id = artifact_id
-            if not selected_id:
-                artifacts = await self._client.list_artifacts(run_id)
-                graphs = [item for item in artifacts if item.get("type") == "work_graph"]
-                if not graphs:
-                    raise BackendError("The work graph has not been published yet.")
-                selected = max(
-                    graphs,
-                    key=lambda item: (
-                        int(item.get("version") or 0),
-                        str(item.get("created_at") or ""),
-                    ),
-                )
-                selected_id = str(selected.get("artifact_id") or "")
-            if not selected_id:
-                raise BackendError("The work graph artifact has no identity.")
-            raw = await self._client.download_artifact(selected_id)
-        except BackendError:
-            raise
-        except ApiError as exc:
-            raise BackendError(str(exc)) from exc
-
-        try:
-            decoded = orjson.loads(raw)
-            if not isinstance(decoded, dict):
-                raise TypeError("work graph artifact must be an object")
-            if decoded.get("schema") != "control-artifact.v1":
-                raise ValueError("work graph artifact has an unsupported schema")
-            if decoded.get("kind") != "work_graph":
-                raise ValueError("artifact does not contain a work graph")
-            payload = decoded.get("payload")
-            if not isinstance(payload, dict):
-                raise TypeError("work graph artifact payload must be an object")
-            units_raw = payload.get("units")
-            if not isinstance(units_raw, list):
-                raise TypeError("work graph units must be a list")
-            units = tuple(_work_unit(item) for item in units_raw)
-        except (orjson.JSONDecodeError, TypeError, ValueError) as exc:
-            raise BackendError("The published work graph is malformed.") from exc
-        return WorkGraphInfo(
-            graph_fingerprint=str(payload.get("graph_fingerprint") or ""),
-            units=units,
-        )
-
     async def switch_workspace(self, selector: str) -> BootInfo:
         try:
             self._binding = await self._workspace_resolver(
@@ -358,31 +301,6 @@ def normalize_event(event: SSEEvent) -> TaskEvent | None:
         visibility=str(data.get("visibility") or "user"),
         payload=payload if isinstance(payload, Mapping) else {},
     )
-
-
-def _work_unit(value: object) -> WorkUnitSpec:
-    if not isinstance(value, Mapping):
-        raise TypeError("work graph unit must be an object")
-    unit_id = value.get("id")
-    objective = value.get("objective")
-    if not isinstance(unit_id, str) or not unit_id.strip():
-        raise ValueError("work graph unit needs an id")
-    if not isinstance(objective, str) or not objective.strip():
-        raise ValueError("work graph unit needs an objective")
-    return WorkUnitSpec(
-        unit_id=unit_id,
-        objective=objective,
-        kind=str(value.get("kind") or "feature"),
-        depends_on=_string_tuple(value.get("depends_on")),
-    )
-
-
-def _string_tuple(value: object) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)):
-        return ()
-    if not all(isinstance(item, str) for item in value):
-        raise ValueError("work graph string collections must contain only strings")
-    return tuple(value)
 
 
 def _new_identity(prefix: str) -> str:

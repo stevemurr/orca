@@ -25,10 +25,6 @@ from orca.app.actions import (
     ThreadLoaded,
     ThreadSelected,
     ViewportChanged,
-    WorkGraphLoaded,
-    WorkGraphUnavailable,
-    WorkSelected,
-    WorkSelectionMoved,
 )
 from orca.app.commands import parse_input
 from orca.app.model import (
@@ -42,10 +38,6 @@ from orca.app.model import (
     TaskEvent,
     TurnState,
     ViewId,
-    WorkMapState,
-    WorkStatus,
-    WorkUnitSpec,
-    WorkUnitState,
 )
 
 
@@ -59,12 +51,6 @@ class SendRunCommand:
     run_id: str
     command: str
     fields: tuple[tuple[str, str], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class DiscoverWorkGraph:
-    run_id: str
-    artifact_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +88,6 @@ class ExitApplication:
 Effect = (
     StartRun
     | SendRunCommand
-    | DiscoverWorkGraph
     | OpenHelp
     | OpenThreads
     | LoadThread
@@ -129,7 +114,6 @@ def reduce(state: AppState, action: Action) -> Transition:
                 "cursor": 0,
                 "run_status": RunStatus.IDLE,
                 "turns": (),
-                "work": WorkMapState(),
                 "interaction": None,
                 "view_stack": (ViewId.CONVERSATION,),
                 "developer_cursor": 0,
@@ -165,9 +149,6 @@ def reduce(state: AppState, action: Action) -> Transition:
         if stack[-1] is not action.view:
             stack = (*stack, action.view)
         updated = replace(state, view_stack=stack)
-        if action.view is ViewId.AGENTS:
-            updated, effects = _request_graph_if_needed(updated)
-            return Transition(updated, effects)
         if action.view is ViewId.INSPECTOR:
             updated = replace(updated, developer=True)
             run_id = updated.active_run_id or updated.latest_run_id
@@ -219,7 +200,6 @@ def reduce(state: AppState, action: Action) -> Transition:
                 run_status=RunStatus.QUEUED,
                 submitting=False,
                 turns=(*state.turns, turn),
-                work=WorkMapState(run_id=action.run_id),
                 interaction=None,
                 developer_cursor=0,
                 developer_events=(),
@@ -229,46 +209,6 @@ def reduce(state: AppState, action: Action) -> Transition:
         return Transition(_notice(replace(state, submitting=False), action.message, "error"))
     if isinstance(action, EventReceived):
         return _event(state, action.event)
-    if isinstance(action, WorkGraphLoaded):
-        if action.run_id != state.work.run_id:
-            return Transition(state)
-        return Transition(replace(state, work=_merge_graph(state.work, action)))
-    if isinstance(action, WorkGraphUnavailable):
-        if action.run_id != state.work.run_id:
-            return Transition(state)
-        return Transition(
-            replace(
-                state,
-                work=replace(
-                    state.work,
-                    graph_requested=False,
-                    unavailable_reason=action.reason,
-                ),
-            )
-        )
-    if isinstance(action, WorkSelectionMoved):
-        units = state.work.units
-        if not units:
-            return Transition(state)
-        selected = next(
-            (
-                index
-                for index, unit in enumerate(units)
-                if unit.unit_id == state.work.selected_unit_id
-            ),
-            0,
-        )
-        selected = max(0, min(len(units) - 1, selected + action.delta))
-        return Transition(
-            replace(
-                state,
-                work=replace(state.work, selected_unit_id=units[selected].unit_id),
-            )
-        )
-    if isinstance(action, WorkSelected):
-        if action.unit_id not in {unit.unit_id for unit in state.work.units}:
-            return Transition(state)
-        return Transition(replace(state, work=replace(state.work, selected_unit_id=action.unit_id)))
     if isinstance(action, ThreadSelected):
         return Transition(
             replace(state, submitting=True),
@@ -282,7 +222,6 @@ def reduce(state: AppState, action: Action) -> Transition:
             cursor=0,
             run_status=RunStatus.IDLE,
             turns=(),
-            work=WorkMapState(),
             interaction=None,
             view_stack=(ViewId.CONVERSATION,),
             submitting=False,
@@ -369,7 +308,6 @@ def reduce(state: AppState, action: Action) -> Transition:
 
 def _command(state: AppState, name: str, argument: str) -> Transition:
     routes = {
-        "agents": ViewId.AGENTS,
         "chat": ViewId.CONVERSATION,
         "review": ViewId.REVIEW,
         "inspect": ViewId.INSPECTOR,
@@ -404,7 +342,6 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
                 state,
                 thread_id=None,
                 turns=(),
-                work=WorkMapState(),
                 view_stack=(ViewId.CONVERSATION,),
                 developer_cursor=0,
                 developer_events=(),
@@ -477,16 +414,10 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             update_id=update_id,
             text=text,
             status=_string(payload, "status") or "active",
-            work_unit_id=_string(payload, "work_unit_id"),
         )
         turn = _latest_turn(state)
         progress = _upsert_by(turn.progress, item, "update_id")
         state = _replace_latest_turn(state, replace(turn, progress=progress, status="running"))
-        if item.work_unit_id:
-            work = _progress_work(state.work, item)
-            state = replace(state, work=work, run_status=RunStatus.RUNNING)
-            state, effects = _request_graph_if_needed(state)
-            return Transition(state, effects)
         return Transition(state)
 
     if kind == "answer.delta":
@@ -541,24 +472,6 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             )
         )
 
-    if kind == "work.graph.available":
-        artifact_id = _string(payload, "artifact_id")
-        if not run_id:
-            return Transition(state)
-        requested = replace(state, work=replace(state.work, graph_requested=True))
-        return Transition(requested, (DiscoverWorkGraph(run_id, artifact_id),))
-
-    if kind == "work.unit.updated":
-        work = _structured_work_update(state.work, payload)
-        return Transition(replace(state, work=work))
-
-    if kind.startswith("tool."):
-        unit_id = _string(payload, "work_unit_id")
-        if not unit_id:
-            return Transition(state)
-        work = _tool_work(state.work, kind, payload)
-        return Transition(replace(state, work=work))
-
     if kind == "approval.requested":
         allowed = payload.get("allowed_decisions")
         decisions = tuple(str(item) for item in allowed) if isinstance(allowed, list) else ()
@@ -612,7 +525,6 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             provisional_answer="",
             status=terminal.value,
         )
-        work = _terminal_work(state.work, terminal, payload)
         return Transition(
             _replace_latest_turn(
                 replace(
@@ -621,21 +533,12 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
                     run_status=terminal,
                     interaction=None,
                     submitting=False,
-                    work=work,
                 ),
                 turn,
             )
         )
 
     return Transition(state)
-
-
-def _request_graph_if_needed(state: AppState) -> tuple[AppState, tuple[Effect, ...]]:
-    run_id = state.work.run_id or state.latest_run_id
-    if not run_id or state.work.graph_loaded or state.work.graph_requested:
-        return state, ()
-    work = replace(state.work, run_id=run_id, graph_requested=True, unavailable_reason="")
-    return replace(state, work=work), (DiscoverWorkGraph(run_id),)
 
 
 def _ensure_turn(state: AppState, run_id: str) -> AppState:
@@ -664,147 +567,11 @@ def _upsert_by(values: tuple[Any, ...], value: Any, field: str) -> tuple[Any, ..
     return (*values, value)
 
 
-def _work_status(value: str) -> WorkStatus:
-    aliases = {
-        "pending": WorkStatus.WAITING,
-        "ready": WorkStatus.WAITING,
-        "running": WorkStatus.ACTIVE,
-        "succeeded": WorkStatus.COMPLETED,
-    }
-    normalized = value.strip().lower()
-    if normalized in aliases:
-        return aliases[normalized]
-    try:
-        return WorkStatus(normalized)
-    except ValueError:
-        return WorkStatus.UNKNOWN
-
-
 def _reported_run_status(value: str) -> RunStatus | None:
     try:
         return RunStatus(value.strip().lower())
     except ValueError:
         return None
-
-
-def _progress_work(work: WorkMapState, item: ProgressItem) -> WorkMapState:
-    existing = next((unit for unit in work.units if unit.unit_id == item.work_unit_id), None)
-    unit = existing or WorkUnitState(unit_id=item.work_unit_id, objective=item.text)
-    unit = replace(unit, status=_work_status(item.status), progress=item.text)
-    units = _upsert_by(work.units, unit, "unit_id")
-    selected = work.selected_unit_id or item.work_unit_id
-    return replace(work, units=units, selected_unit_id=selected)
-
-
-def _structured_work_update(work: WorkMapState, payload: Mapping[str, Any]) -> WorkMapState:
-    unit_id = _string(payload, "work_unit_id")
-    if not unit_id:
-        return work
-    existing = next((unit for unit in work.units if unit.unit_id == unit_id), None)
-    unit = existing or WorkUnitState(unit_id=unit_id)
-    attempt = payload.get("attempt")
-    unit = replace(
-        unit,
-        status=_work_status(_string(payload, "state") or _string(payload, "status")),
-        agent_id=_string(payload, "worker_id") or unit.agent_id,
-        attempt=int(attempt) if isinstance(attempt, int) else unit.attempt,
-        started_at=_string(payload, "started_at") or unit.started_at,
-        ended_at=_string(payload, "ended_at") or unit.ended_at,
-    )
-    return replace(
-        work,
-        units=_upsert_by(work.units, unit, "unit_id"),
-        selected_unit_id=work.selected_unit_id or unit_id,
-    )
-
-
-def _tool_work(work: WorkMapState, kind: str, payload: Mapping[str, Any]) -> WorkMapState:
-    unit_id = _string(payload, "work_unit_id")
-    existing = next((unit for unit in work.units if unit.unit_id == unit_id), None)
-    unit = existing or WorkUnitState(unit_id=unit_id)
-    tool_id = _string(payload, "tool_call_id") or _string(payload, "tool_id")
-    tool_ids = unit.tool_ids
-    if tool_id and tool_id not in tool_ids:
-        tool_ids = (*tool_ids, tool_id)
-    tool_name = _string(payload, "name")
-    active_tool = tool_name if kind == "tool.started" else ""
-    unit = replace(unit, tool_ids=tool_ids, active_tool=active_tool)
-    return replace(
-        work,
-        units=_upsert_by(work.units, unit, "unit_id"),
-        selected_unit_id=work.selected_unit_id or unit_id,
-    )
-
-
-def _terminal_work(
-    work: WorkMapState,
-    terminal: RunStatus,
-    payload: Mapping[str, Any],
-) -> WorkMapState:
-    units = work.units
-    reported = payload.get("work_units")
-    if isinstance(reported, list):
-        for item in reported:
-            if not isinstance(item, Mapping):
-                continue
-            unit_id = _string(item, "unit_id")
-            if not unit_id:
-                continue
-            existing = next((unit for unit in units if unit.unit_id == unit_id), None)
-            unit = existing or WorkUnitState(unit_id=unit_id)
-            attempts = item.get("attempts")
-            unit = replace(
-                unit,
-                status=_work_status(_string(item, "status")),
-                attempt=int(attempts) if isinstance(attempts, int) else unit.attempt,
-            )
-            units = _upsert_by(units, unit, "unit_id")
-    elif terminal is RunStatus.COMPLETED:
-        units = tuple(
-            replace(unit, status=WorkStatus.COMPLETED)
-            if unit.status in {WorkStatus.ACTIVE, WorkStatus.CHECKING}
-            else unit
-            for unit in units
-        )
-    return replace(work, units=units)
-
-
-def _merge_graph(work: WorkMapState, action: WorkGraphLoaded) -> WorkMapState:
-    live = {unit.unit_id: unit for unit in work.units}
-    merged: list[WorkUnitState] = []
-    for spec in action.units:
-        existing = live.pop(spec.unit_id, None)
-        if existing is None:
-            merged.append(_unit_from_spec(spec))
-        else:
-            merged.append(
-                replace(
-                    existing,
-                    objective=spec.objective,
-                    kind=spec.kind,
-                    depends_on=spec.depends_on,
-                )
-            )
-    merged.extend(live.values())
-    selected = work.selected_unit_id or (merged[0].unit_id if merged else "")
-    return replace(
-        work,
-        graph_fingerprint=action.graph_fingerprint,
-        units=tuple(merged),
-        selected_unit_id=selected,
-        graph_loaded=True,
-        graph_requested=True,
-        unavailable_reason="",
-    )
-
-
-def _unit_from_spec(spec: WorkUnitSpec) -> WorkUnitState:
-    return WorkUnitState(
-        unit_id=spec.unit_id,
-        objective=spec.objective,
-        kind=spec.kind,
-        depends_on=spec.depends_on,
-    )
 
 
 def _notice(state: AppState, message: str, level: str = "info") -> AppState:

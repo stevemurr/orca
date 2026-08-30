@@ -1,13 +1,10 @@
-"""Task API adapter tests for the greenfield terminal runtime."""
+"""Adapter tests for the bundled HTTP implementation of the backend port."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import orjson
-import pytest
-
-from orca.backend import BackendError, RunRequest
+from orca.backend import RunRequest
 from orca.client import SSEEvent
 from orca.connection import Connection, CredentialSource
 from orca.http_backend import HttpBackend, normalize_event
@@ -59,39 +56,6 @@ class FakeClient:
     async def send_command(self, run_id, command):  # type: ignore[no-untyped-def]
         self.commands.append({"run_id": run_id, **command})
         return {"status": "accepted"}
-
-    async def list_artifacts(self, run_id):  # type: ignore[no-untyped-def]
-        assert run_id == "run-1"
-        return [
-            {"artifact_id": "plan-1", "type": "plan", "version": 1},
-            {"artifact_id": "graph-1", "type": "work_graph", "version": 1},
-        ]
-
-    async def download_artifact(self, artifact_id):  # type: ignore[no-untyped-def]
-        assert artifact_id == "graph-1"
-        return orjson.dumps(
-            {
-                "schema": "control-artifact.v1",
-                "kind": "work_graph",
-                "payload": {
-                    "graph_fingerprint": "fingerprint-1",
-                    "units": [
-                        {
-                            "id": "contract",
-                            "kind": "foundation",
-                            "objective": "Map the contract",
-                            "depends_on": [],
-                        },
-                        {
-                            "id": "shell",
-                            "kind": "feature",
-                            "objective": "Build the shell",
-                            "depends_on": ["contract"],
-                        },
-                    ],
-                },
-            }
-        )
 
     async def list_threads(self, **kwargs):  # type: ignore[no-untyped-def]
         del kwargs
@@ -155,12 +119,6 @@ class FakeClient:
         self.closed = True
 
 
-class BareGraphClient(FakeClient):
-    async def download_artifact(self, artifact_id):  # type: ignore[no-untyped-def]
-        assert artifact_id == "graph-1"
-        return orjson.dumps({"graph_fingerprint": "test-only", "units": []})
-
-
 def binding() -> WorkspaceBinding:
     root = Path("/tmp/project")
     return WorkspaceBinding("ws-1", "project", root, root, ".", "none")
@@ -184,7 +142,7 @@ def connection() -> Connection:
     )
 
 
-def test_wire_event_is_normalized_without_server_model_imports() -> None:
+def test_wire_event_is_normalized_without_importing_a_backend_event_model() -> None:
     normalized = normalize_event(
         SSEEvent(
             "42",
@@ -205,7 +163,7 @@ def test_wire_event_is_normalized_without_server_model_imports() -> None:
     assert normalize_event(SSEEvent("42", "stream.end", {"reason": "terminal"})) is None
 
 
-async def test_backend_boot_submit_stream_command_and_graph_are_contract_only() -> None:
+async def test_boot_submit_stream_command_and_history_are_contract_only() -> None:
     client = FakeClient()
     backend = HttpBackend(
         connection(),
@@ -220,7 +178,6 @@ async def test_backend_boot_submit_stream_command_and_graph_are_contract_only() 
     )
     streamed = [item async for item in backend.stream(run.run_id, after_seq=0, developer=False)]
     command = await backend.send_command(run.run_id, "pause", {})
-    graph = await backend.load_work_graph(run.run_id)
     threads = await backend.recent_threads()
     history = await backend.load_thread("thread-1")
     await backend.close()
@@ -233,8 +190,6 @@ async def test_backend_boot_submit_stream_command_and_graph_are_contract_only() 
     assert [item.kind for item in streamed] == ["run.created"]
     assert command == {"status": "accepted"}
     assert str(client.commands[0]["command_id"]).startswith("cmd_")
-    assert [unit.unit_id for unit in graph.units] == ["contract", "shell"]
-    assert graph.units[1].depends_on == ("contract",)
     assert threads[0]["thread_id"] == "thread-1"
     assert [run.run_id for run in history.runs] == ["run-1", "run-2"]
     assert [event.kind for event in history.runs[0].events] == [
@@ -242,16 +197,3 @@ async def test_backend_boot_submit_stream_command_and_graph_are_contract_only() 
         "run.completed",
     ]
     assert client.closed
-
-
-async def test_work_graph_requires_the_public_control_artifact_envelope() -> None:
-    backend = HttpBackend(
-        connection(),
-        client=BareGraphClient(),  # type: ignore[arg-type]
-        server_ensurer=no_server,
-        workspace_resolver=fixed_workspace,
-    )
-    await backend.boot()
-
-    with pytest.raises(BackendError, match="malformed"):
-        await backend.load_work_graph("run-1")

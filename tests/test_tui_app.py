@@ -4,18 +4,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from orca.app.actions import EventReceived, RunAccepted, WorkGraphLoaded
-from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId, WorkUnitSpec
-from orca.backend import (
-    BackendError,
-    BootInfo,
-    RunInfo,
-    ThreadHistoryInfo,
-    WorkGraphInfo,
-)
+from orca.app.actions import EventReceived, RunAccepted
+from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
+from orca.backend import BackendError, BootInfo, RunInfo, ThreadHistoryInfo
 from orca.tui.app import OrcaApp
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
-from orca.tui.views import AgentsView
 from orca.tui.widgets import Composer
 
 
@@ -36,8 +29,8 @@ class FakeBackend:
             endpoint="http://127.0.0.1:8420",
             protocol_version="1.6",
             workspace_id="ws-1",
-            workspace_name="orchestrator",
-            workspace_path="~/Code/orchestrator",
+            workspace_name="orca",
+            workspace_path="~/Code/orca",
             cwd_relative=".",
         )
 
@@ -56,12 +49,7 @@ class FakeBackend:
             event(
                 2,
                 "run.progress",
-                {
-                    "update_id": "work:shell",
-                    "work_unit_id": "shell",
-                    "status": "active",
-                    "text": "Building the shell.",
-                },
+                {"update_id": "shell", "status": "active", "text": "Building the shell."},
             ),
         ]
         if developer:
@@ -85,17 +73,6 @@ class FakeBackend:
     ) -> dict[str, object]:
         self.commands.append((run_id, command, fields))
         return {"status": "accepted"}
-
-    async def load_work_graph(self, run_id: str, artifact_id: str = "") -> WorkGraphInfo:
-        assert run_id == "run-1"
-        del artifact_id
-        return WorkGraphInfo(
-            "graph-1",
-            (
-                WorkUnitSpec("contract", "Map the public contract", "foundation"),
-                WorkUnitSpec("shell", "Build the terminal shell", depends_on=("contract",)),
-            ),
-        )
 
     async def switch_workspace(self, selector: str) -> BootInfo:
         raise AssertionError(f"unexpected workspace switch: {selector}")
@@ -155,13 +132,13 @@ async def test_view_command_swaps_only_the_center_surface() -> None:
         assert app.model.connected
 
         composer = app.query_one(Composer)
-        composer.load_text("/agents")
+        composer.load_text("/review")
         composer.focus()
         await pilot.press("enter")
         await pilot.pause()
 
-        assert app.model.view is ViewId.AGENTS
-        assert app.query_one("#view-host").current == "agents"  # type: ignore[attr-defined]
+        assert app.model.view is ViewId.REVIEW
+        assert app.query_one("#view-host").current == "review"  # type: ignore[attr-defined]
 
         await pilot.press("escape")
         await pilot.pause()
@@ -170,7 +147,7 @@ async def test_view_command_swaps_only_the_center_surface() -> None:
         assert app.query_one(Composer) is composer
 
 
-async def test_submit_follows_run_and_loads_work_graph_without_view_owned_io() -> None:
+async def test_submit_follows_the_run_without_view_owned_io() -> None:
     backend = FakeBackend()
     app = OrcaApp(backend)
 
@@ -184,9 +161,9 @@ async def test_submit_follows_run_and_loads_work_graph_without_view_owned_io() -
         await pilot.pause()
 
         assert backend.started == ["Build it"]
+        assert app.model.turns[-1].request == "Build it"
+        assert [item.text for item in app.model.turns[-1].progress] == ["Building the shell."]
         assert app.model.turns[-1].answer == "The shell is ready."
-        assert app.model.work.graph_loaded
-        assert [unit.unit_id for unit in app.model.work.units] == ["contract", "shell"]
 
 
 async def test_approval_shortcuts_dispatch_typed_command() -> None:
@@ -257,13 +234,15 @@ async def test_failed_approval_command_can_be_retried_in_the_same_modal() -> Non
         ]
 
 
-async def test_agents_view_does_not_steal_focus_from_the_composer() -> None:
+async def test_a_view_switch_does_not_steal_focus_from_the_composer() -> None:
+    """Kept from the work map's own focus test: the composer is never taken away mid-sentence."""
+
     backend = FakeBackend()
     app = OrcaApp(backend)
 
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
-        app.invoke_command("agents")
+        app.invoke_command("review")
         await pilot.pause()
 
         composer = app.query_one(Composer)
@@ -273,27 +252,6 @@ async def test_agents_view_does_not_steal_focus_from_the_composer() -> None:
 
     assert composer.text == "hi"
     assert app.model.composer_draft == "hi"
-
-
-async def test_agents_view_opens_at_the_top_of_a_long_work_map() -> None:
-    backend = FakeBackend()
-    app = OrcaApp(backend)
-    units = tuple(
-        WorkUnitSpec(f"unit-{index}", f"Inspect rendering scenario {index}", "feature")
-        for index in range(20)
-    )
-
-    async with app.run_test(size=(40, 20)) as pilot:
-        await pilot.pause()
-        app.apply_model_action(RunAccepted("run-many", "thread-many"))
-        app.apply_model_action(WorkGraphLoaded("run-many", units))
-        app.invoke_command("agents")
-        await pilot.pause()
-        await pilot.pause()
-
-        view = app.query_one(AgentsView)
-        assert view.max_scroll_y > 0
-        assert view.scroll_y == 0
 
 
 async def test_help_overlay_owns_escape_before_the_application_shell() -> None:

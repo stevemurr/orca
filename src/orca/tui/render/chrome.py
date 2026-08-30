@@ -90,8 +90,7 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
 def render_footer(state: AppState) -> Text:
     left = {
         "conversation": f"{state.mode} · {state.policy}",
-        "agents": "↑↓ select · esc back · /chat conversation",
-        "review": "esc back · /agents work map",
+        "review": "esc back · /chat conversation",
         "inspector": "developer view · esc back",
     }[state.view.value]
     right = "ctrl+p commands"

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from orca.app.model import TaskEvent, ThreadReplay, ViewId, WorkUnitSpec
+from orca.app.model import TaskEvent, ThreadReplay, ViewId
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,29 +76,6 @@ class EventReceived:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkGraphLoaded:
-    run_id: str
-    units: tuple[WorkUnitSpec, ...]
-    graph_fingerprint: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class WorkGraphUnavailable:
-    run_id: str
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class WorkSelectionMoved:
-    delta: int
-
-
-@dataclass(frozen=True, slots=True)
-class WorkSelected:
-    unit_id: str
-
-
-@dataclass(frozen=True, slots=True)
 class ThreadSelected:
     thread_id: str
     title: str = ""
@@ -139,10 +116,6 @@ Action = (
     | RunAccepted
     | OperationFailed
     | EventReceived
-    | WorkGraphLoaded
-    | WorkGraphUnavailable
-    | WorkSelectionMoved
-    | WorkSelected
     | ThreadSelected
     | ThreadLoaded
     | ApprovalDecided

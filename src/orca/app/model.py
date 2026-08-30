@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 class ViewId(str, Enum):
     CONVERSATION = "conversation"
-    AGENTS = "agents"
     REVIEW = "review"
     INSPECTOR = "inspector"
 
@@ -26,17 +25,6 @@ class RunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-
-
-class WorkStatus(str, Enum):
-    WAITING = "waiting"
-    ACTIVE = "active"
-    CHECKING = "checking"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    BLOCKED = "blocked"
-    CANCELLED = "cancelled"
-    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +56,6 @@ class ProgressItem:
     update_id: str
     text: str
     status: str = "active"
-    work_unit_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,45 +97,6 @@ class TurnState:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkUnitSpec:
-    unit_id: str
-    objective: str
-    kind: str = "feature"
-    depends_on: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class WorkUnitState:
-    unit_id: str
-    objective: str = ""
-    kind: str = "feature"
-    depends_on: tuple[str, ...] = ()
-    status: WorkStatus = WorkStatus.WAITING
-    agent_id: str = ""
-    attempt: int = 0
-    progress: str = ""
-    tool_ids: tuple[str, ...] = ()
-    active_tool: str = ""
-    started_at: str = ""
-    ended_at: str = ""
-
-    @property
-    def tool_count(self) -> int:
-        return len(self.tool_ids)
-
-
-@dataclass(frozen=True, slots=True)
-class WorkMapState:
-    run_id: str = ""
-    graph_fingerprint: str = ""
-    units: tuple[WorkUnitState, ...] = ()
-    selected_unit_id: str = ""
-    graph_loaded: bool = False
-    graph_requested: bool = False
-    unavailable_reason: str = ""
-
-
-@dataclass(frozen=True, slots=True)
 class InteractionState:
     kind: Literal["approval", "question"]
     request_id: str
@@ -187,7 +135,6 @@ class AppState:
     run_status: RunStatus = RunStatus.IDLE
     capabilities: frozenset[str] = frozenset()
     turns: tuple[TurnState, ...] = ()
-    work: WorkMapState = WorkMapState()
     interaction: InteractionState | None = None
     composer_draft: str = ""
     submitting: bool = False

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol
 
-from orca.app.model import TaskEvent, ThreadReplay, WorkUnitSpec
+from orca.app.model import TaskEvent, ThreadReplay
 
 
 class BackendError(RuntimeError):
@@ -42,12 +42,6 @@ class RunInfo:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkGraphInfo:
-    graph_fingerprint: str
-    units: tuple[WorkUnitSpec, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class ThreadHistoryInfo:
     thread_id: str
     title: str
@@ -75,12 +69,6 @@ class TerminalBackend(Protocol):
         command: str,
         fields: dict[str, str],
     ) -> dict[str, object]: ...
-
-    async def load_work_graph(
-        self,
-        run_id: str,
-        artifact_id: str = "",
-    ) -> WorkGraphInfo: ...
 
     async def switch_workspace(self, selector: str) -> BootInfo: ...
 

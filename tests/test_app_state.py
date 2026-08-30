@@ -10,19 +10,10 @@ from orca.app.actions import (
     RunAccepted,
     ThreadLoaded,
     ThreadSelected,
-    WorkGraphLoaded,
-    WorkGraphUnavailable,
 )
 from orca.app.commands import ParsedCommand, parse_input
-from orca.app.model import (
-    AppState,
-    TaskEvent,
-    ThreadReplay,
-    ViewId,
-    WorkStatus,
-    WorkUnitSpec,
-)
-from orca.app.update import DiscoverWorkGraph, FollowRun, LoadThread, reduce
+from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
+from orca.app.update import FollowRun, LoadThread, reduce
 
 
 def event(sequence: int, kind: str, payload: dict[str, object]) -> TaskEvent:
@@ -44,10 +35,10 @@ def feed(state: AppState, *events: TaskEvent) -> AppState:
 def test_navigation_is_state_not_terminal_side_effect() -> None:
     state = AppState(composer_draft="keep this draft")
 
-    agents = reduce(state, Navigate(ViewId.AGENTS)).state
-    returned = reduce(agents, Back()).state
+    review = reduce(state, Navigate(ViewId.REVIEW)).state
+    returned = reduce(review, Back()).state
 
-    assert agents.view is ViewId.AGENTS
+    assert review.view is ViewId.REVIEW
     assert returned.view is ViewId.CONVERSATION
     assert returned.composer_draft == "keep this draft"
 
@@ -73,13 +64,13 @@ def test_boot_preserves_an_explicit_thread_but_workspace_switch_resets_context()
 
 
 def test_command_parser_distinguishes_navigation_from_user_paths() -> None:
-    assert parse_input("/agents") == ParsedCommand("agents", "")
+    assert parse_input("/review") == ParsedCommand("review", "")
     assert parse_input("/mode plan") == ParsedCommand("mode", "plan")
     assert parse_input("/Users/murr/project") is None
     assert parse_input("ordinary request") is None
 
 
-def test_event_replay_builds_conversation_and_work_without_renderables() -> None:
+def test_event_replay_builds_the_conversation_without_renderables() -> None:
     transition = reduce(AppState(), RunAccepted("run-1", "thread-1"))
     state = transition.state
     state = feed(
@@ -101,8 +92,7 @@ def test_event_replay_builds_conversation_and_work_without_renderables() -> None
                 2,
                 "run.progress",
                 {
-                    "update_id": "work:terminal",
-                    "work_unit_id": "terminal",
+                    "update_id": "shell",
                     "status": "active",
                     "text": "Working on the terminal shell.",
                 },
@@ -111,22 +101,12 @@ def test_event_replay_builds_conversation_and_work_without_renderables() -> None
     )
     state = progress.state
 
-    assert progress.effects == (DiscoverWorkGraph("run-1"),)
+    assert progress.effects == ()
     assert state.turns[-1].request == "Build the terminal shell"
-    assert state.work.units[0].unit_id == "terminal"
-    assert state.work.units[0].status is WorkStatus.ACTIVE
+    assert state.turns[-1].progress[0].text == "Working on the terminal shell."
 
     state = feed(
         state,
-        event(
-            3,
-            "tool.started",
-            {
-                "work_unit_id": "terminal",
-                "tool_call_id": "tool-1",
-                "name": "workspace.read_file",
-            },
-        ),
         event(
             4,
             "answer.delta",
@@ -145,10 +125,8 @@ def test_event_replay_builds_conversation_and_work_without_renderables() -> None
     )
 
     turn = state.turns[-1]
-    unit = state.work.units[0]
     assert turn.provisional_answer == ""
     assert turn.answer == "Implemented the terminal shell."
-    assert unit.tool_count == 1
     assert state.active_run_id is None
     assert state.cursor == 6
 
@@ -170,85 +148,6 @@ def test_a_new_answer_attempt_replaces_abandoned_stream_and_duplicate_is_ignored
 
     assert state.turns[-1].provisional_answer == "replacement"
     assert state.cursor == 2
-
-
-def test_work_graph_merges_topology_with_live_placeholder_state() -> None:
-    state = reduce(AppState(), RunAccepted("run-1", "thread-1")).state
-    state = feed(
-        state,
-        event(
-            1,
-            "run.progress",
-            {
-                "update_id": "work:terminal",
-                "work_unit_id": "terminal",
-                "status": "active",
-                "text": "Building the shell.",
-            },
-        ),
-    )
-    loaded = reduce(
-        state,
-        WorkGraphLoaded(
-            "run-1",
-            (
-                WorkUnitSpec("contract", "Map the public contract", "foundation"),
-                WorkUnitSpec(
-                    "terminal",
-                    "Build the terminal shell",
-                    "feature",
-                    depends_on=("contract",),
-                ),
-            ),
-        ),
-    ).state
-
-    assert [unit.unit_id for unit in loaded.work.units] == ["contract", "terminal"]
-    terminal = loaded.work.units[1]
-    assert terminal.status is WorkStatus.ACTIVE
-    assert terminal.depends_on == ("contract",)
-
-
-def test_work_graph_discovery_retries_after_artifact_is_not_yet_available() -> None:
-    state = reduce(AppState(), RunAccepted("run-1", "thread-1")).state
-    first = reduce(
-        state,
-        EventReceived(
-            event(
-                1,
-                "run.progress",
-                {
-                    "update_id": "work:shell",
-                    "work_unit_id": "shell",
-                    "status": "active",
-                    "text": "Starting the shell.",
-                },
-            )
-        ),
-    )
-    unavailable = reduce(
-        first.state,
-        WorkGraphUnavailable("run-1", "The graph has not been published yet."),
-    )
-    retry = reduce(
-        unavailable.state,
-        EventReceived(
-            event(
-                2,
-                "run.progress",
-                {
-                    "update_id": "work:shell",
-                    "work_unit_id": "shell",
-                    "status": "active",
-                    "text": "Building the shell.",
-                },
-            )
-        ),
-    )
-
-    assert unavailable.state.work.graph_requested is False
-    assert retry.effects == (DiscoverWorkGraph("run-1"),)
-    assert retry.state.work.graph_requested is True
 
 
 def test_selecting_a_thread_starts_a_clean_continuation_context() -> None:
