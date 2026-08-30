@@ -1,0 +1,440 @@
+"""Headless interaction tests for the persistent Textual shell."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+from orca.app.actions import EventReceived, RunAccepted, WorkGraphLoaded
+from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId, WorkUnitSpec
+from orca.backend import (
+    BackendError,
+    BootInfo,
+    RunInfo,
+    ThreadHistoryInfo,
+    WorkGraphInfo,
+)
+from orca.tui.app import OrcaApp
+from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
+from orca.tui.views import AgentsView
+from orca.tui.widgets import Composer
+
+
+def event(sequence: int, kind: str, payload: dict[str, object]) -> TaskEvent:
+    return TaskEvent(sequence, f"evt-{sequence}", kind, "user", payload)
+
+
+class FakeBackend:
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.commands: list[tuple[str, str, dict[str, str]]] = []
+        self.streams: list[tuple[str, int, bool]] = []
+        self.closed = False
+
+    async def boot(self) -> BootInfo:
+        return BootInfo(
+            profile="local",
+            endpoint="http://127.0.0.1:8420",
+            protocol_version="1.6",
+            workspace_id="ws-1",
+            workspace_name="orchestrator",
+            workspace_path="~/Code/orchestrator",
+            cwd_relative=".",
+        )
+
+    async def start_run(self, request) -> RunInfo:  # type: ignore[no-untyped-def]
+        self.started.append(request.message)
+        return RunInfo("run-1", "thread-1")
+
+    async def stream(
+        self, run_id: str, *, after_seq: int, developer: bool
+    ) -> AsyncIterator[TaskEvent]:
+        assert run_id == "run-1"
+        assert after_seq == 0
+        self.streams.append((run_id, after_seq, developer))
+        items = [
+            event(1, "run.created", {"message": self.started[-1] if self.started else "Attached"}),
+            event(
+                2,
+                "run.progress",
+                {
+                    "update_id": "work:shell",
+                    "work_unit_id": "shell",
+                    "status": "active",
+                    "text": "Building the shell.",
+                },
+            ),
+        ]
+        if developer:
+            items.append(
+                TaskEvent(
+                    3,
+                    "dev-3",
+                    "control.transition",
+                    "developer",
+                    {},
+                )
+            )
+        items.append(
+            event(4 if developer else 3, "run.completed", {"summary": "The shell is ready."})
+        )
+        for item in items:
+            yield item
+
+    async def send_command(
+        self, run_id: str, command: str, fields: dict[str, str]
+    ) -> dict[str, object]:
+        self.commands.append((run_id, command, fields))
+        return {"status": "accepted"}
+
+    async def load_work_graph(self, run_id: str, artifact_id: str = "") -> WorkGraphInfo:
+        assert run_id == "run-1"
+        del artifact_id
+        return WorkGraphInfo(
+            "graph-1",
+            (
+                WorkUnitSpec("contract", "Map the public contract", "foundation"),
+                WorkUnitSpec("shell", "Build the terminal shell", depends_on=("contract",)),
+            ),
+        )
+
+    async def switch_workspace(self, selector: str) -> BootInfo:
+        raise AssertionError(f"unexpected workspace switch: {selector}")
+
+    async def recent_threads(self) -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "thread_id": "thread-recent",
+                "title": "Polish the terminal",
+                "latest_run_status": "completed",
+                "updated_at": "2026-08-28T18:00:00Z",
+            },
+        )
+
+    async def load_thread(self, thread_id: str) -> ThreadHistoryInfo:
+        assert thread_id == "thread-recent"
+        return ThreadHistoryInfo(
+            thread_id,
+            "Polish the terminal",
+            (
+                ThreadReplay(
+                    "run-recent",
+                    "completed",
+                    (
+                        event(1, "run.created", {"message": "Polish the terminal"}),
+                        event(2, "run.completed", {"summary": "Polished it."}),
+                    ),
+                ),
+            ),
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class RetryApprovalBackend(FakeBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_once = True
+
+    async def send_command(
+        self, run_id: str, command: str, fields: dict[str, str]
+    ) -> dict[str, object]:
+        if self.fail_once:
+            self.fail_once = False
+            raise BackendError("The server is reconnecting.")
+        return await super().send_command(run_id, command, fields)
+
+
+async def test_view_command_swaps_only_the_center_surface() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        assert app.model.view is ViewId.CONVERSATION
+        assert app.model.connected
+
+        composer = app.query_one(Composer)
+        composer.load_text("/agents")
+        composer.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.model.view is ViewId.AGENTS
+        assert app.query_one("#view-host").current == "agents"  # type: ignore[attr-defined]
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert app.model.view is ViewId.CONVERSATION
+        assert app.query_one(Composer) is composer
+
+
+async def test_submit_follows_run_and_loads_work_graph_without_view_owned_io() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.load_text("Build it")
+        composer.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert backend.started == ["Build it"]
+        assert app.model.turns[-1].answer == "The shell is ready."
+        assert app.model.work.graph_loaded
+        assert [unit.unit_id for unit in app.model.work.units] == ["contract", "shell"]
+
+
+async def test_approval_shortcuts_dispatch_typed_command() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        # Establish the active run without coupling this interaction test to submission.
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    1,
+                    "approval.requested",
+                    {
+                        "approval_id": "approval-1",
+                        "title": "Run the tests?",
+                        "allowed_decisions": ["approve", "reject"],
+                    },
+                )
+            )
+        )
+        await pilot.press("1")
+        await pilot.pause()
+
+        assert backend.commands == [
+            (
+                "run-1",
+                "resolve_approval",
+                {"approval_id": "approval-1", "decision": "approve"},
+            )
+        ]
+
+
+async def test_failed_approval_command_can_be_retried_in_the_same_modal() -> None:
+    backend = RetryApprovalBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    1,
+                    "approval.requested",
+                    {
+                        "approval_id": "approval-1",
+                        "title": "Run the tests?",
+                        "allowed_decisions": ["approve", "reject"],
+                    },
+                )
+            )
+        )
+
+        await pilot.press("1")
+        await pilot.pause()
+        await pilot.press("1")
+        await pilot.pause()
+
+        assert backend.commands == [
+            (
+                "run-1",
+                "resolve_approval",
+                {"approval_id": "approval-1", "decision": "approve"},
+            )
+        ]
+
+
+async def test_agents_view_does_not_steal_focus_from_the_composer() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.invoke_command("agents")
+        await pilot.pause()
+
+        composer = app.query_one(Composer)
+        composer.focus()
+        await pilot.press("h", "i")
+        await pilot.pause()
+
+    assert composer.text == "hi"
+    assert app.model.composer_draft == "hi"
+
+
+async def test_agents_view_opens_at_the_top_of_a_long_work_map() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+    units = tuple(
+        WorkUnitSpec(f"unit-{index}", f"Inspect rendering scenario {index}", "feature")
+        for index in range(20)
+    )
+
+    async with app.run_test(size=(40, 20)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-many", "thread-many"))
+        app.apply_model_action(WorkGraphLoaded("run-many", units))
+        app.invoke_command("agents")
+        await pilot.pause()
+        await pilot.pause()
+
+        view = app.query_one(AgentsView)
+        assert view.max_scroll_y > 0
+        assert view.scroll_y == 0
+
+
+async def test_help_overlay_owns_escape_before_the_application_shell() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.invoke_command("help")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, HelpScreen)
+        assert app.model.view is ViewId.CONVERSATION
+
+
+async def test_help_overlay_scrolls_on_a_short_terminal() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(40, 20)) as pilot:
+        await pilot.pause()
+        app.invoke_command("help")
+        await pilot.pause()
+
+        card = app.screen.query_one("#help-card")
+        assert card.max_scroll_y > 0  # type: ignore[attr-defined]
+        card.scroll_end(animate=False)  # type: ignore[attr-defined]
+        await pilot.pause()
+
+        assert card.scroll_y == card.max_scroll_y  # type: ignore[attr-defined]
+
+
+async def test_approval_overlay_scrolls_on_a_tiny_terminal() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(30, 15)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    1,
+                    "approval.requested",
+                    {
+                        "approval_id": "approval-1",
+                        "title": "Run a deliberately long command on the local workspace?",
+                        "command": "python -m pytest tests/with/a/very/long/path",
+                        "allowed_decisions": ["approve", "approve_bash_always", "reject"],
+                    },
+                )
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(app.screen, ApprovalScreen)
+        card = app.screen.query_one("#approval-card")
+        if card.max_scroll_y:  # type: ignore[attr-defined]
+            card.scroll_end(animate=False)  # type: ignore[attr-defined]
+            await pilot.pause()
+            assert card.scroll_y == card.max_scroll_y  # type: ignore[attr-defined]
+        else:
+            assert card.virtual_size.height <= card.size.height  # type: ignore[attr-defined]
+
+
+async def test_approval_overlay_reflows_when_the_terminal_is_resized() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    1,
+                    "approval.requested",
+                    {
+                        "approval_id": "approval-1",
+                        "title": "Run a deliberately long command on the local workspace?",
+                        "command": "python -m pytest tests/with/a/very/long/path",
+                        "allowed_decisions": ["approve", "approve_bash_always", "reject"],
+                    },
+                )
+            )
+        )
+        await pilot.pause()
+        card = app.screen.query_one("#approval-card")
+
+        await pilot.resize_terminal(30, 15)
+        await pilot.pause()
+        await pilot.pause()
+
+        assert card.virtual_size.width <= card.size.width  # type: ignore[attr-defined]
+        assert card.max_scroll_x == 0  # type: ignore[attr-defined]
+
+
+async def test_inspector_restarts_follow_with_developer_visibility() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.invoke_command("inspect")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert backend.streams[-1] == ("run-1", 0, True)
+        assert app.model.developer_events == ("   3  control.transition",)
+        assert app.model.view is ViewId.INSPECTOR
+
+
+async def test_thread_picker_continues_the_selected_conversation() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.invoke_command("threads")
+        await pilot.pause()
+        assert isinstance(app.screen, ThreadPickerScreen)
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ThreadPickerScreen)
+        assert app.model.thread_id == "thread-recent"
+        assert app.model.turns[-1].answer == "Polished it."
+        assert app.model.notices[-1].message == "Continuing Polish the terminal"
+
+
+async def test_explicit_thread_replays_on_boot() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend, initial=AppState(thread_id="thread-recent"))
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app.model.thread_id == "thread-recent"
+        assert app.model.turns[-1].request == "Polish the terminal"
+        assert app.model.turns[-1].answer == "Polished it."
