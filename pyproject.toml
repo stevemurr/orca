@@ -1,0 +1,48 @@
+[project]
+name = "orca"
+version = "0.1.0"
+description = "A terminal client for agent harnesses that implement the orca backend contract"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "httpx>=0.27",               # the reference HTTP backend and its SSE stream
+    "orjson>=3.9",               # SSE payload decode on the event hot path
+    "typer>=0.12",               # the `orca` command surface
+    "rich>=13.7",                # renderer-neutral terminal projections
+    "textual>=8.2,<9",           # state-driven interactive terminal views
+    # Client credentials belong in the platform credential store, never a project `.env`.
+    # Headless callers use the explicit token environment/file paths instead.
+    "keyring>=25",
+]
+
+[project.scripts]
+orca = "orca.entrypoint:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orca"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+ignore = [
+    # `typer.Option(...)` in a parameter default is the documented Typer idiom. The rule is
+    # right about mutable defaults in general and wrong here.
+    "B008",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
