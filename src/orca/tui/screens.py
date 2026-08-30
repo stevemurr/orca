@@ -120,7 +120,7 @@ class ApprovalScreen(ModalScreen[None]):
         self.app.apply_model_action(ApprovalDecided(decision))  # type: ignore[attr-defined]
 
     def allow_retry(self) -> None:
-        """Restore choices after the command could not reach the Task API."""
+        """Restore choices after the command could not reach the backend."""
 
         self._sending = False
         self.query_one("#approval-content", Static).update(self._content())

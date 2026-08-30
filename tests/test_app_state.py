@@ -1,4 +1,4 @@
-"""Behavioral contract for the greenfield terminal application core."""
+"""Behavioral contract for the terminal application core."""
 
 from __future__ import annotations
 

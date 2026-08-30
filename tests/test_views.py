@@ -1,4 +1,4 @@
-"""Pure rendering tests for the greenfield terminal views."""
+"""Pure rendering tests for the terminal views."""
 
 from __future__ import annotations
 

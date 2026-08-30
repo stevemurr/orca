@@ -1,4 +1,4 @@
-"""Public command surface for the greenfield CLI cutover."""
+"""The public command surface stays small."""
 
 from __future__ import annotations
 
@@ -23,9 +23,11 @@ def test_root_help_is_the_small_product_surface() -> None:
     assert "threads" in output
     assert "auth" in output
     assert "server" in output
-    assert "eval-run" not in output
-    assert "compactions" not in output
+    # The whole surface, and no more of it. Everything a person can do lives behind these five
+    # verbs or a slash command inside the shell; a sixth top-level verb is a design decision.
+    assert "agents" not in output
     assert "graph" not in output
+    assert "memory" not in output
 
 
 def test_chat_launches_the_view_app_with_resolved_options(monkeypatch) -> None:
@@ -46,7 +48,7 @@ def test_chat_launches_the_view_app_with_resolved_options(monkeypatch) -> None:
             "--profile",
             "staging",
             "--url",
-            "https://orch.example.test",
+            "https://harness.example.test",
             "chat",
             "--workspace",
             "/tmp/project",
@@ -60,7 +62,7 @@ def test_chat_launches_the_view_app_with_resolved_options(monkeypatch) -> None:
         "workspace": "/tmp/project",
         "thread": "thread-1",
         "profile": "staging",
-        "url": "https://orch.example.test",
+        "url": "https://harness.example.test",
     }
 
 

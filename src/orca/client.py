@@ -140,7 +140,7 @@ class HttpApiClient:
         A connection can disappear after the server commits but before the response reaches the
         client.  Retrying the same body and idempotency identity is the only way to distinguish
         that case from a request that never arrived.  This helper is deliberately limited to the
-        two Task API writes whose public contract supplies such an identity.
+        two contract writes that supply such an identity.
         """
 
         for attempt in range(_IDEMPOTENT_POST_ATTEMPTS):
