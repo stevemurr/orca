@@ -175,8 +175,28 @@ without opening a second live cursor.
 
 ### `stream.end`
 
-A frame whose payload is the `data` object itself — `reason` at the top level, not under
-`payload`. It is transport, not an ending:
+The only frame orca identifies by its SSE **`event:` name** rather than by a `type` inside
+`data`, because it is transport and not a row of the log:
+
+```
+event: stream.end
+data: {"reason": "terminal"}
+```
+
+`reason` sits at the top level of `data`, not under `payload`. A frame that carries
+`{"type": "stream.end"}` in its `data` and no `event:` line is read as an ordinary event of an
+unknown kind, so the follow never learns the run is over — orca reconnects from its cursor,
+receives the same unrecognised frame, and loops silently and forever. Write the `event:` line.
+
+**Close the connection immediately after it.** orca reads the response to its natural end
+rather than breaking out of the stream — abandoning an async generator suspended inside a
+streaming context manager needs an `await` that generator finalization is not allowed to
+perform — so `stream.end` tells it *what happened* and EOF is what actually returns control.
+A server that sends `stream.end` and then holds the socket open on keep-alive hangs orca for
+as long as it holds it. There is no read timeout to rescue it: a run is allowed to think for
+an hour, so an idle stream is never treated as a failure.
+
+The reason:
 
 | `reason` | Means |
 |---|---|
@@ -244,6 +264,8 @@ cannot honour rather than accepting it silently — the person is watching for t
 ## What a backend must guarantee
 
 - **`?after_seq` is exact.** Everything else is a convenience; this one is load-bearing.
+- **`stream.end` carries an `event:` line, and the connection closes right after it.** Those two
+  together are what end a follow; either one missing is a silent hang rather than an error.
 - **Exactly one terminal event per run**, and nothing after it. `run.paused` and the waiting
   states are not endings.
 - **Runs survive disconnection.** Closing the terminal is not cancelling.

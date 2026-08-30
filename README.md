@@ -70,6 +70,11 @@ losing nothing and seeing nothing twice. Everything else the client does — sur
 connection, replaying a thread into live state, the developer inspector's separate cursor — rests
 on that one property.
 
+A Python backend ends a follow by returning from the generator. Over HTTP that same ending is two
+things at once — a `stream.end` frame named on the SSE `event:` line, and the connection closing
+right behind it — and `docs/backend-contract.md` spells both out, because a stream that sends
+neither hangs the client with no error rather than failing it.
+
 ---
 
 ## Events
