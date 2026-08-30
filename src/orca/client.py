@@ -180,27 +180,6 @@ class HttpApiClient:
     async def list_workspaces(self):
         return await self._request("GET", "/workspaces")
 
-    # -- durable memory ---------------------------------------------------------------
-
-    async def list_memories(self, **params):
-        return await self._request(
-            "GET", "/memories", params={k: v for k, v in params.items() if v is not None}
-        )
-
-    async def create_memory(self, body: dict[str, Any]):
-        return await self._request("POST", "/memories", json=body)
-
-    async def memory_feedback(
-        self, memory_id: str, action: str, *, note: str = "", replacement: str | None = None
-    ):
-        body: dict[str, Any] = {"action": action, "note": note}
-        if replacement is not None:
-            body["replacement"] = replacement
-        return await self._request("POST", f"/memories/{memory_id}/feedback", json=body)
-
-    async def run_memory(self, run_id: str):
-        return await self._request("GET", f"/runs/{run_id}/memory")
-
     # -- threads and runs ----------------------------------------------------------------
 
     async def create_thread(self, workspace_id: str | None = None, title: str = ""):
@@ -216,19 +195,14 @@ class HttpApiClient:
         *,
         mode: str | None = None,
         approval_policy: str | None = None,
-        memory_policy: str | None = None,
         client_context: dict[str, Any] | None = None,
-        plan_gate: bool | None = None,
-        decompose: bool | None = None,
-        skills: list[dict[str, str]] | None = None,
-        available_skills: list[dict[str, str]] | None = None,
         idempotency_key: str | None = None,
     ):
         """Start a run.
 
-        Every optional field is here because the API has it.  The reference client must be able
-        to exercise any server-advertised mode and freeze both explicitly selected skills and a
-        lazily loadable skill catalogue without reaching into server configuration.
+        Every optional field here is one orca's own surface can express. The contract permits a
+        backend to accept more, and this client deliberately does not carry parameters no view
+        can set: an argument nothing sends is a contract claim nothing tests.
         """
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         # Omitted rather than sent as null when there is none: the field is optional, and a
@@ -241,35 +215,12 @@ class HttpApiClient:
             body["mode"] = mode
         if approval_policy:
             body["approval_policy"] = approval_policy
-        if memory_policy:
-            body["memory_policy"] = memory_policy
         if client_context:
             body["client_context"] = client_context
-        if plan_gate:
-            body["plan_gate"] = True
-        if decompose:
-            body["decompose"] = True
-        if skills:
-            body["skills"] = skills
-        if available_skills:
-            body["available_skills"] = available_skills
         path = f"/threads/{thread_id}/runs"
         if idempotency_key:
             return await self._idempotent_post(path, json=body, headers=headers)
         return await self._request("POST", path, json=body, headers=headers)
-
-    async def list_approvals(self, run_id: str):
-        return await self._request("GET", f"/runs/{run_id}/approvals")
-
-    async def list_questions(self, run_id: str):
-        return await self._request("GET", f"/runs/{run_id}/questions")
-
-    async def model_metrics(self, **params):
-        return await self._request(
-            "GET",
-            "/admin/metrics/models",
-            params={k: v for k, v in params.items() if v is not None},
-        )
 
     async def list_runs(self, **params):
         return await self._request(
@@ -284,58 +235,12 @@ class HttpApiClient:
             "GET", "/threads", params={k: v for k, v in params.items() if v is not None}
         )
 
-    async def get_run(self, run_id: str):
-        return await self._request("GET", f"/runs/{run_id}")
-
-    async def list_artifacts(self, run_id: str):
-        return await self._request("GET", f"/runs/{run_id}/artifacts")
-
-    async def download_artifact(self, artifact_id: str) -> bytes:
-        try:
-            resp = await self._client.get(f"{self._base}/artifacts/{artifact_id}")
-        except httpx.RequestError as exc:
-            raise ApiError(
-                0,
-                "server_unreachable",
-                f"Could not connect to the backend at {self._origin}.",
-            ) from exc
-        # `raise_for_status()` would surface an `artifact_gone` as an httpx traceback the CLI
-        # does not catch; every other call reports the server's own `{code, message}`.
-        if resp.status_code >= 400:
-            raise _error_for(resp)
-        return resp.content
-
     async def send_command(self, run_id: str, command: dict[str, Any]):
         if command.get("command_id"):
             return await self._idempotent_post(f"/runs/{run_id}/commands", json=command)
         return await self._request("POST", f"/runs/{run_id}/commands", json=command)
 
-    async def validate_config(self, path: str, env: str | None = None):
-        return await self._request(
-            "POST", "/admin/config/validate", json={"path": path, "env": env}
-        )
-
-    async def activate_config(self, path: str, env: str | None = None, reason: str = ""):
-        return await self._request(
-            "POST",
-            "/admin/config/activate",
-            json={"path": path, "env": env, "reason": reason, "author": "cli"},
-        )
-
-    async def rollback_config(self, reason: str = ""):
-        return await self._request(
-            "POST", "/admin/config/rollback", json={"reason": reason, "author": "cli"}
-        )
-
-    async def show_config(self):
-        return await self._request("GET", "/admin/config")
-
-    async def config_versions(self):
-        return await self._request("GET", "/admin/config/versions")
-
-    async def probe_models(self):
-        """Operator-only. Long timeout: probing sends real requests to every endpoint."""
-        return await self._request("POST", "/admin/models/probe", timeout=180.0)
+    # -- discovery ---------------------------------------------------------------------
 
     async def capabilities(self):
         return await self._request("GET", "/capabilities")
@@ -368,13 +273,6 @@ class HttpApiClient:
             async for line in resp.aiter_lines():
                 events.extend(parser.feed(line))
         return events
-
-    async def conformance(self, run_id: str):
-        return await self._request("GET", f"/runs/{run_id}/conformance")
-
-    async def traces(self, run_id: str):
-        """Return the server-owned developer trace projection for one run."""
-        return await self._request("GET", f"/runs/{run_id}/traces")
 
     async def stream_events(
         self, run_id: str, *, after_seq: int = 0, visibility: str = "user"

@@ -133,7 +133,6 @@ class AppState:
     mode: str = "auto"
     policy: str = "safe"
     run_status: RunStatus = RunStatus.IDLE
-    capabilities: frozenset[str] = frozenset()
     turns: tuple[TurnState, ...] = ()
     interaction: InteractionState | None = None
     composer_draft: str = ""

@@ -39,7 +39,6 @@ async def run_once(
             workspace_name=boot.workspace_name,
             workspace_path=boot.workspace_path,
             cwd_relative=boot.cwd_relative,
-            capabilities=boot.capabilities,
         ),
     ).state
     accepted = await backend.start_run(

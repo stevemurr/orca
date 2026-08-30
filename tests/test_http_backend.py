@@ -19,10 +19,7 @@ class FakeClient:
         self.closed = False
 
     async def capabilities(self):  # type: ignore[no-untyped-def]
-        return {
-            "protocol_version": "1.6",
-            "features": {"approvals": True, "questions": True, "skills": False},
-        }
+        return {"protocol_version": "1.6"}
 
     async def create_thread(self, workspace_id=None, title=""):  # type: ignore[no-untyped-def]
         self.created_threads.append({"workspace_id": workspace_id, "title": title})
@@ -183,7 +180,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
     await backend.close()
 
     assert boot.workspace_path == "/tmp/project"
-    assert boot.capabilities == frozenset({"approvals", "questions"})
+    assert boot.protocol_version == "1.6"
     assert run.thread_id == "thread-1"
     assert client.created_runs[0]["client_context"] == {"cwd_relative": "."}
     assert str(client.created_runs[0]["idempotency_key"]).startswith("idem_")

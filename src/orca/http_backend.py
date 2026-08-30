@@ -101,12 +101,11 @@ class HttpBackend:
         self._workspace_resolver = workspace_resolver
         self._binding: WorkspaceBinding | None = None
         self._protocol_version = ""
-        self._capabilities: frozenset[str] = frozenset()
 
     async def boot(self) -> BootInfo:
         try:
             await self._server_ensurer(self.connection)
-            capabilities = await self._client.capabilities()
+            discovery = await self._client.capabilities()
             self._binding = await self._workspace_resolver(
                 self._client,
                 selector=self._workspace_selector,
@@ -115,12 +114,7 @@ class HttpBackend:
         except (ApiError, ManagedServerError, WorkspaceContextError) as exc:
             raise BackendError(str(exc)) from exc
 
-        self._protocol_version = str(capabilities.get("protocol_version") or "?")
-        features = capabilities.get("features")
-        if isinstance(features, Mapping):
-            self._capabilities = frozenset(
-                str(name) for name, available in features.items() if available is True
-            )
+        self._protocol_version = str(discovery.get("protocol_version") or "?")
         return self._boot_info()
 
     async def start_run(self, request: RunRequest) -> RunInfo:
@@ -276,7 +270,6 @@ class HttpBackend:
             workspace_name=binding.name,
             workspace_path=_display_path(binding.active_directory),
             cwd_relative=binding.cwd_relative,
-            capabilities=self._capabilities,
         )
 
 

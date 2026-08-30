@@ -385,7 +385,6 @@ class OrcaApp(App[None]):
                 workspace_name=info.workspace_name,
                 workspace_path=info.workspace_path,
                 cwd_relative=info.cwd_relative,
-                capabilities=info.capabilities,
             )
         )
         if self.model.thread_id and not self.model.turns:
@@ -455,7 +454,6 @@ class OrcaApp(App[None]):
                 workspace_name=info.workspace_name,
                 workspace_path=info.workspace_path,
                 cwd_relative=info.cwd_relative,
-                capabilities=info.capabilities,
                 reset_conversation=True,
             )
         )

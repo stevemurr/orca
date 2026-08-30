@@ -134,7 +134,6 @@ def reduce(state: AppState, action: Action) -> Transition:
                 workspace_name=action.workspace_name,
                 workspace_path=action.workspace_path,
                 cwd_relative=action.cwd_relative,
-                capabilities=action.capabilities,
                 **conversation,
             )
         )

@@ -18,7 +18,6 @@ class BootCompleted:
     workspace_name: str
     workspace_path: str
     cwd_relative: str
-    capabilities: frozenset[str] = frozenset()
     reset_conversation: bool = False
 
 
