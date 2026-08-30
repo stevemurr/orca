@@ -134,7 +134,12 @@ a directory that is not a registered project.
 ### `GET /runs?thread_id=&limit=`
 
 `{"runs": [{"run_id", "status"}, …]}`, newest first. orca reverses it to replay a thread oldest
-first.
+first, and reads `status` to know whether a replayed run is still going.
+
+`status` is `queued`, `running`, `awaiting_approval`, `awaiting_input`, `paused`, `blocked`,
+`completed`, `failed` or `cancelled`. The last four are terminal. A value orca does not recognise
+leaves the run shown as still going, which is the safe direction to be wrong in: a run reported as
+finished when it is not is a person walking away from live work.
 
 ---
 
