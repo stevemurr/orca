@@ -70,7 +70,12 @@ class SessionInfo:
 
 @dataclass(frozen=True, slots=True)
 class RunRequest:
-    """One turn a person asked for."""
+    """One unit of work a person asked for.
+
+    A run, not a turn: the backend may take many model turns to finish one, and calling it a
+    turn invites a client to expect one reply per request. `thread` is the conversation;
+    `run` is one piece of work inside it -- the same pairing the OpenAI Assistants API uses.
+    """
 
     message: str
     #: Continue this conversation, or None to let the backend start one.
@@ -127,6 +132,66 @@ class ThreadSummary:
     updated_at: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class Pause:
+    """Stop the run where it is. Not terminal -- `resume` continues it."""
+
+
+@dataclass(frozen=True, slots=True)
+class Resume:
+    """Continue a paused run."""
+
+
+@dataclass(frozen=True, slots=True)
+class Cancel:
+    """End the run. Terminal."""
+
+
+@dataclass(frozen=True, slots=True)
+class Steer:
+    """A further instruction for a run already going."""
+
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class Answer:
+    """A reply to `question.requested`."""
+
+    question_id: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveApproval:
+    """A decision on `approval.requested`."""
+
+    approval_id: str
+    #: One of the values that request's `allowed_decisions` offered. Deliberately a plain
+    #: string: the decision vocabulary belongs to the backend, and closing it here would
+    #: constrain backends to orca's words -- which the two rules above forbid. The *command*
+    #: vocabulary below is closed because it is orca's own, outbound; this field is not.
+    decision: str
+
+
+#: Everything orca can ask of a run in flight. Closed, and safely so: these are the commands
+#: orca *sends*, so a backend cannot invent one orca would emit. Typing them closes the
+#: combinations that were previously expressible and wrong -- `send_command(id, "answer", {})`
+#: type-checked cleanly and was missing both of its fields. (2026-08-30)
+Command = Pause | Resume | Cancel | Steer | Answer | ResolveApproval
+
+
+@dataclass(frozen=True, slots=True)
+class CommandOutcome:
+    """What the backend said about a command.
+
+    `status` is the only thing orca reads, and it is shown as a one-line notice, so
+    `CommandOutcome("cancelling")` reads better to a person than an empty one.
+    """
+
+    status: str = ""
+
+
 class TerminalBackend(Protocol):
     """All I/O the terminal may request, kept outside widgets and reducers."""
 
@@ -175,26 +240,15 @@ class TerminalBackend(Protocol):
         """
         ...
 
-    async def send_command(
-        self,
-        run_id: str,
-        command: str,
-        fields: dict[str, str],
-    ) -> dict[str, object]:
-        """Act on a run in flight, and return whatever the backend says about it.
+    async def send_command(self, run_id: str, command: Command) -> CommandOutcome:
+        """Act on a run in flight, and say what happened.
 
-        orca sends six commands, and a backend that cannot honour one should refuse it rather
-        than silently accept it:
+        The `Command` union is the whole vocabulary; match on it. A backend that cannot
+        honour one should raise `BackendError` rather than accept it silently -- the person
+        is watching for the run to change, and a command that vanishes reads as a hang.
 
-        * `pause` / `resume` / `cancel` — no fields.
-        * `steer` — `{"content": <text>}`, a further instruction for a run already going.
-        * `answer` — `{"question_id": ..., "content": ...}`, replying to `question.requested`.
-        * `resolve_approval` — `{"approval_id": ..., "decision": ...}`, where the decision is
-          one of the values that request offered.
-
-        The return value is shown as a one-line notice using its `status` key if it has one, so
-        `{"status": "cancelling"}` reads better than `{}`. Any command may be retried: orca does
-        not deduplicate, so a backend that cares must carry its own idempotency.
+        Any command may be retried: orca does not deduplicate, so a backend that cares must
+        carry its own idempotency.
         """
         ...
 

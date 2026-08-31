@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca.backend import RunRequest
+from orca.backend import CommandOutcome, Pause, RunRequest
 from orca.client import SSEEvent
 from orca.connection import Connection, CredentialSource
 from orca.http_backend import HttpBackend, normalize_event
@@ -174,7 +174,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
         RunRequest("Build it", None, session.workspace_id, session.cwd_relative, "auto", "safe")
     )
     streamed = [item async for item in backend.stream(run.run_id, after_seq=0, developer=False)]
-    command = await backend.send_command(run.run_id, "pause", {})
+    command = await backend.send_command(run.run_id, Pause())
     threads = await backend.recent_threads()
     history = await backend.load_thread("thread-1")
     await backend.close()
@@ -185,7 +185,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
     assert client.created_runs[0]["client_context"] == {"cwd_relative": "."}
     assert str(client.created_runs[0]["idempotency_key"]).startswith("idem_")
     assert [item.kind for item in streamed] == ["run.created"]
-    assert command == {"status": "accepted"}
+    assert command == CommandOutcome("accepted")
     assert str(client.commands[0]["command_id"]).startswith("cmd_")
     assert threads[0].thread_id == "thread-1"
     assert [run.run_id for run in history.runs] == ["run-1", "run-2"]

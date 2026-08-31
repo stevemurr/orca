@@ -28,7 +28,7 @@ class TerminalBackend(Protocol):
     async def connect(self) -> SessionInfo: ...
     async def start_run(self, request: RunRequest) -> RunInfo: ...
     def stream(self, run_id: str, *, after_seq: int, developer: bool) -> AsyncIterator[TaskEvent]: ...
-    async def send_command(self, run_id: str, command: str, fields: dict[str, str]) -> dict[str, object]: ...
+    async def send_command(self, run_id: str, command: Command) -> CommandOutcome: ...
     async def switch_workspace(self, selector: str) -> SessionInfo: ...
     async def recent_threads(self) -> tuple[ThreadSummary, ...]: ...
     async def load_thread(self, thread_id: str) -> ThreadHistoryInfo: ...
@@ -40,7 +40,7 @@ class TerminalBackend(Protocol):
 | `connect()` | Connect, resolve the working folder, describe both. Called once, before anything else; everything expensive belongs here, where a failure is one legible message instead of a half-built session. |
 | `start_run(request)` | Accept one turn and return its ids **immediately**. Do not wait for the work — everything after acceptance arrives through `stream`. A backend that blocks here freezes the terminal for the length of the task. |
 | `stream(run_id, after_seq, developer)` | Yield that run's events in `seq` order, starting after `after_seq`. An async generator, so no `await` on the call. Return when the run reaches a terminal event. |
-| `send_command(run_id, command, fields)` | Act on a run in flight: `pause`, `resume`, `cancel`, `steer`, `answer`, `resolve_approval`. Return a dict; its `status` key becomes a one-line notice. |
+| `send_command(run_id, command)` | Act on a run in flight. `command` is the `Command` union — `Pause`, `Resume`, `Cancel`, `Steer(content)`, `Answer(question_id, content)`, `ResolveApproval(approval_id, decision)` — so match on it. Raise `BackendError` for one you cannot honour; a command that vanishes reads as a hang. `CommandOutcome.status` becomes a one-line notice. |
 | `switch_workspace(selector)` | Rebind the session to another folder, named however a person would name it — a path, a name, an id. Resolve it or raise; orca never guesses. |
 | `recent_threads()` | List conversations a person might continue, most recent first, as `ThreadSummary` rows. Only `thread_id` is required; the rest render as sensible blanks. Return `()` if you have no history. |
 | `load_thread(thread_id)` | Read one conversation's bounded history. Reading only — following a live run is `stream`'s job. |
@@ -197,8 +197,8 @@ class EchoBackend:
             await asyncio.sleep(0.3)
             yield TaskEvent(sequence, f"evt-{sequence}", kind, "user", payload)
 
-    async def send_command(self, run_id, command, fields) -> dict[str, object]:
-        return {"status": "accepted"}
+    async def send_command(self, run_id, command) -> CommandOutcome:
+        return CommandOutcome("accepted")
 
     async def switch_workspace(self, selector: str) -> SessionInfo:
         return await self.connect()

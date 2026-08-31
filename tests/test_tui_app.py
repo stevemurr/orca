@@ -6,7 +6,16 @@ from collections.abc import AsyncIterator
 
 from orca.app.actions import EventReceived, RunAccepted
 from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
-from orca.backend import BackendError, RunInfo, SessionInfo, ThreadHistoryInfo, ThreadSummary
+from orca.backend import (
+    BackendError,
+    Command,
+    CommandOutcome,
+    ResolveApproval,
+    RunInfo,
+    SessionInfo,
+    ThreadHistoryInfo,
+    ThreadSummary,
+)
 from orca.tui.app import OrcaApp
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
 from orca.tui.widgets import Composer
@@ -68,11 +77,9 @@ class FakeBackend:
         for item in items:
             yield item
 
-    async def send_command(
-        self, run_id: str, command: str, fields: dict[str, str]
-    ) -> dict[str, object]:
-        self.commands.append((run_id, command, fields))
-        return {"status": "accepted"}
+    async def send_command(self, run_id: str, command: Command) -> CommandOutcome:
+        self.commands.append((run_id, command))
+        return CommandOutcome("accepted")
 
     async def switch_workspace(self, selector: str) -> SessionInfo:
         raise AssertionError(f"unexpected workspace switch: {selector}")
@@ -113,13 +120,11 @@ class RetryApprovalBackend(FakeBackend):
         super().__init__()
         self.fail_once = True
 
-    async def send_command(
-        self, run_id: str, command: str, fields: dict[str, str]
-    ) -> dict[str, object]:
+    async def send_command(self, run_id: str, command: Command) -> CommandOutcome:
         if self.fail_once:
             self.fail_once = False
             raise BackendError("The server is reconnecting.")
-        return await super().send_command(run_id, command, fields)
+        return await super().send_command(run_id, command)
 
 
 async def test_view_command_swaps_only_the_center_surface() -> None:
@@ -191,11 +196,7 @@ async def test_approval_shortcuts_dispatch_typed_command() -> None:
         await pilot.pause()
 
         assert backend.commands == [
-            (
-                "run-1",
-                "resolve_approval",
-                {"approval_id": "approval-1", "decision": "approve"},
-            )
+            ("run-1", ResolveApproval("approval-1", "approve"))
         ]
 
 
@@ -226,11 +227,7 @@ async def test_failed_approval_command_can_be_retried_in_the_same_modal() -> Non
         await pilot.pause()
 
         assert backend.commands == [
-            (
-                "run-1",
-                "resolve_approval",
-                {"approval_id": "approval-1", "decision": "approve"},
-            )
+            ("run-1", ResolveApproval("approval-1", "approve"))
         ]
 
 

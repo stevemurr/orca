@@ -38,7 +38,7 @@ from orca.app.update import (
     SwitchWorkspace,
     reduce,
 )
-from orca.backend import BackendError, RunRequest, TerminalBackend
+from orca.backend import BackendError, ResolveApproval, RunRequest, TerminalBackend
 from orca.tui.commands import OrcaCommands
 from orca.tui.render import (
     render_footer,
@@ -427,17 +427,17 @@ class OrcaApp(App[None]):
 
     async def _send_command(self, effect: SendRunCommand) -> None:
         try:
-            response = await self.backend.send_command(
-                effect.run_id,
-                effect.command,
-                dict(effect.fields),
-            )
+            outcome = await self.backend.send_command(effect.run_id, effect.command)
         except BackendError as exc:
-            if effect.command == "resolve_approval" and isinstance(self.screen, ApprovalScreen):
+            if isinstance(effect.command, ResolveApproval) and isinstance(
+                self.screen, ApprovalScreen
+            ):
                 self.screen.allow_retry()
             self.apply_model_action(OperationFailed(str(exc)))
             return
-        self.apply_model_action(CommandCompleted(effect.command, response))
+        self.apply_model_action(
+            CommandCompleted(type(effect.command).__name__.lower(), outcome)
+        )
 
     async def _switch_workspace(self, selector: str) -> None:
         try:

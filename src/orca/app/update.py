@@ -39,6 +39,15 @@ from orca.app.model import (
     TurnState,
     ViewId,
 )
+from orca.backend import (
+    Answer,
+    Cancel,
+    Command,
+    Pause,
+    ResolveApproval,
+    Resume,
+    Steer,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +58,7 @@ class StartRun:
 @dataclass(frozen=True, slots=True)
 class SendRunCommand:
     run_id: str
-    command: str
-    fields: tuple[tuple[str, str], ...] = ()
+    command: Command
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +191,7 @@ def reduce(state: AppState, action: Action) -> Transition:
         if state.active_run_id:
             return Transition(
                 cleared,
-                (SendRunCommand(state.active_run_id, "steer", (("content", text),)),),
+                (SendRunCommand(state.active_run_id, Steer(text)),),
             )
         return Transition(replace(cleared, submitting=True), (StartRun(text),))
     if isinstance(action, CommandInvoked):
@@ -274,11 +282,7 @@ def reduce(state: AppState, action: Action) -> Transition:
             (
                 SendRunCommand(
                     state.active_run_id,
-                    "resolve_approval",
-                    (
-                        ("approval_id", interaction.request_id),
-                        ("decision", action.decision),
-                    ),
+                    ResolveApproval(interaction.request_id, action.decision),
                 ),
             ),
         )
@@ -291,17 +295,14 @@ def reduce(state: AppState, action: Action) -> Transition:
             (
                 SendRunCommand(
                     state.active_run_id,
-                    "answer",
-                    (
-                        ("question_id", interaction.request_id),
-                        ("content", action.answer),
-                    ),
+                    Answer(interaction.request_id, action.answer),
                 ),
             ),
         )
     if isinstance(action, CommandCompleted):
-        label = str(action.response.get("status") or "sent")
-        return Transition(_notice(state, f"{action.command}: {label}"))
+        return Transition(
+            _notice(state, f"{action.command}: {action.outcome.status or 'sent'}")
+        )
     raise TypeError(f"unsupported action: {type(action).__name__}")
 
 
@@ -365,10 +366,10 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
     if name == "status":
         label = state.run_status.value.replace("_", " ")
         return Transition(_notice(state, f"{state.profile} · {state.workspace_path} · {label}"))
-    if name in {"pause", "resume", "cancel"}:
+    if (lifecycle := {"pause": Pause, "resume": Resume, "cancel": Cancel}.get(name)) is not None:
         if not state.active_run_id:
             return Transition(_notice(state, "No run is active."))
-        return Transition(state, (SendRunCommand(state.active_run_id, name),))
+        return Transition(state, (SendRunCommand(state.active_run_id, lifecycle()),))
     return Transition(_notice(state, f"Unknown command: /{name}", "warning"))
 
 

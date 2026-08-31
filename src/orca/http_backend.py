@@ -11,14 +11,22 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from orca.app.model import TaskEvent, ThreadReplay
 from orca.backend import (
+    Answer,
     BackendError,
+    Cancel,
+    Command,
+    CommandOutcome,
+    Pause,
+    ResolveApproval,
+    Resume,
     RunInfo,
     RunRequest,
     SessionInfo,
+    Steer,
     ThreadHistoryInfo,
     ThreadSummary,
 )
@@ -76,6 +84,34 @@ class _BackendHttpClient(Protocol):
 
 ServerEnsurer = Callable[[Connection], Awaitable[object]]
 WorkspaceResolver = Callable[..., Awaitable[WorkspaceBinding]]
+
+
+def _wire(command: Command) -> dict[str, Any]:
+    """One command as the HTTP contract's body.
+
+    The wire vocabulary is unchanged by typing the Python side -- `type` is still the same
+    six strings a backend already matches on -- so this is a translation, not a protocol
+    change. Exhaustive by construction: a new member of the union that is not handled here
+    reaches the final raise rather than being sent as a body with no `type`.
+    """
+    match command:
+        case Pause():
+            return {"type": "pause"}
+        case Resume():
+            return {"type": "resume"}
+        case Cancel():
+            return {"type": "cancel"}
+        case Steer(content=content):
+            return {"type": "steer", "content": content}
+        case Answer(question_id=question_id, content=content):
+            return {"type": "answer", "question_id": question_id, "content": content}
+        case ResolveApproval(approval_id=approval_id, decision=decision):
+            return {
+                "type": "resolve_approval",
+                "approval_id": approval_id,
+                "decision": decision,
+            }
+    raise BackendError(f"unsupported command: {command!r}")
 
 
 class HttpBackend:
@@ -160,22 +196,13 @@ class HttpBackend:
         except ApiError as exc:
             raise BackendError(str(exc)) from exc
 
-    async def send_command(
-        self,
-        run_id: str,
-        command: str,
-        fields: dict[str, str],
-    ) -> dict[str, object]:
-        body: dict[str, Any] = {
-            "command_id": _new_identity("cmd"),
-            "type": command,
-            **fields,
-        }
+    async def send_command(self, run_id: str, command: Command) -> CommandOutcome:
+        body: dict[str, Any] = {"command_id": _new_identity("cmd"), **_wire(command)}
         try:
             response = await self._client.send_command(run_id, body)
         except ApiError as exc:
             raise BackendError(str(exc)) from exc
-        return cast(dict[str, object], response)
+        return CommandOutcome(str(response.get("status") or ""))
 
     async def switch_workspace(self, selector: str) -> SessionInfo:
         try:

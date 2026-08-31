@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from orca.app.model import TaskEvent, ThreadReplay, ViewId
+from orca.backend import CommandOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +99,7 @@ class QuestionAnswered:
 @dataclass(frozen=True, slots=True)
 class CommandCompleted:
     command: str
-    response: Mapping[str, Any]
+    outcome: CommandOutcome
 
 
 Action = (
