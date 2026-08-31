@@ -8,13 +8,13 @@ from io import StringIO
 import orjson
 
 from orca.app.model import TaskEvent
-from orca.backend import BootInfo, RunInfo, RunRequest
+from orca.backend import RunInfo, RunRequest, SessionInfo
 from orca.output.plain import run_once
 
 
 class PlainBackend:
-    async def boot(self) -> BootInfo:
-        return BootInfo("local", "http://localhost", "1.6", "ws-1", "project", "/project")
+    async def connect(self) -> SessionInfo:
+        return SessionInfo("local", "http://localhost", "1.6", "ws-1", "project", "/project")
 
     async def start_run(self, request: RunRequest) -> RunInfo:
         assert request.workspace_id == "ws-1"

@@ -16,9 +16,9 @@ from typing import Any, Protocol, cast
 from orca.app.model import TaskEvent, ThreadReplay
 from orca.backend import (
     BackendError,
-    BootInfo,
     RunInfo,
     RunRequest,
+    SessionInfo,
     ThreadHistoryInfo,
     ThreadSummary,
 )
@@ -103,7 +103,7 @@ class HttpBackend:
         self._binding: WorkspaceBinding | None = None
         self._protocol_version = ""
 
-    async def boot(self) -> BootInfo:
+    async def connect(self) -> SessionInfo:
         try:
             await self._server_ensurer(self.connection)
             discovery = await self._client.capabilities()
@@ -116,7 +116,7 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
 
         self._protocol_version = str(discovery.get("protocol_version") or "?")
-        return self._boot_info()
+        return self._session_info()
 
     async def start_run(self, request: RunRequest) -> RunInfo:
         binding = self._require_binding()
@@ -177,7 +177,7 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
         return cast(dict[str, object], response)
 
-    async def switch_workspace(self, selector: str) -> BootInfo:
+    async def switch_workspace(self, selector: str) -> SessionInfo:
         try:
             self._binding = await self._workspace_resolver(
                 self._client,
@@ -186,7 +186,7 @@ class HttpBackend:
             )
         except (ApiError, WorkspaceContextError) as exc:
             raise BackendError(str(exc)) from exc
-        return self._boot_info()
+        return self._session_info()
 
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         binding = self._require_binding()
@@ -272,9 +272,9 @@ class HttpBackend:
             raise BackendError("The terminal session has not finished connecting.")
         return self._binding
 
-    def _boot_info(self) -> BootInfo:
+    def _session_info(self) -> SessionInfo:
         binding = self._require_binding()
-        return BootInfo(
+        return SessionInfo(
             profile=self.connection.profile,
             endpoint=self.connection.endpoint,
             protocol_version=self._protocol_version,

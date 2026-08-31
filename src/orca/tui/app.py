@@ -12,12 +12,12 @@ from textual.widgets import ContentSwitcher, Static, TextArea
 
 from orca.app.actions import (
     Back,
-    BootCompleted,
-    BootFailed,
     CommandCompleted,
     CommandInvoked,
     ComposerChanged,
     ComposerSubmitted,
+    Connected,
+    ConnectFailed,
     EventReceived,
     OperationFailed,
     RunAccepted,
@@ -372,12 +372,12 @@ class OrcaApp(App[None]):
 
     async def _boot(self) -> None:
         try:
-            info = await self.backend.boot()
+            info = await self.backend.connect()
         except BackendError as exc:
-            self.apply_model_action(BootFailed(str(exc)))
+            self.apply_model_action(ConnectFailed(str(exc)))
             return
         self.apply_model_action(
-            BootCompleted(
+            Connected(
                 profile=info.profile,
                 endpoint=info.endpoint,
                 protocol_version=info.protocol_version,
@@ -446,7 +446,7 @@ class OrcaApp(App[None]):
             self.apply_model_action(OperationFailed(str(exc)))
             return
         self.apply_model_action(
-            BootCompleted(
+            Connected(
                 profile=info.profile,
                 endpoint=info.endpoint,
                 protocol_version=info.protocol_version,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from orca.app.actions import (
     Back,
-    BootCompleted,
+    Connected,
     EventReceived,
     Navigate,
     RunAccepted,
@@ -55,8 +55,8 @@ def test_boot_preserves_an_explicit_thread_but_workspace_switch_resets_context()
     }
     initial = AppState(thread_id="thread-explicit")
 
-    booted = reduce(initial, BootCompleted(**info)).state
-    switched = reduce(booted, BootCompleted(**info, reset_conversation=True)).state
+    booted = reduce(initial, Connected(**info)).state
+    switched = reduce(booted, Connected(**info, reset_conversation=True)).state
 
     assert booted.thread_id == "thread-explicit"
     assert switched.thread_id is None

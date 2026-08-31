@@ -9,7 +9,7 @@ from typing import Any, BinaryIO, TextIO
 
 import orjson
 
-from orca.app.actions import BootCompleted, EventReceived, RunAccepted
+from orca.app.actions import Connected, EventReceived, RunAccepted
 from orca.app.model import AppState
 from orca.app.update import reduce
 from orca.backend import RunRequest, TerminalBackend
@@ -28,25 +28,25 @@ async def run_once(
 
     text_output = stdout or sys.stdout
     byte_output = binary_stdout or getattr(text_output, "buffer", None)
-    boot = await backend.boot()
+    session = await backend.connect()
     state = reduce(
         AppState(thread_id=request.thread_id),
-        BootCompleted(
-            profile=boot.profile,
-            endpoint=boot.endpoint,
-            protocol_version=boot.protocol_version,
-            workspace_id=boot.workspace_id,
-            workspace_name=boot.workspace_name,
-            workspace_path=boot.workspace_path,
-            cwd_relative=boot.cwd_relative,
+        Connected(
+            profile=session.profile,
+            endpoint=session.endpoint,
+            protocol_version=session.protocol_version,
+            workspace_id=session.workspace_id,
+            workspace_name=session.workspace_name,
+            workspace_path=session.workspace_path,
+            cwd_relative=session.cwd_relative,
         ),
     ).state
     accepted = await backend.start_run(
         RunRequest(
             message=request.message,
             thread_id=request.thread_id,
-            workspace_id=boot.workspace_id,
-            cwd_relative=boot.cwd_relative,
+            workspace_id=session.workspace_id,
+            cwd_relative=session.cwd_relative,
             mode=request.mode,
             policy=request.policy,
         )

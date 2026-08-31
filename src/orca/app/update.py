@@ -11,12 +11,12 @@ from orca.app.actions import (
     Action,
     ApprovalDecided,
     Back,
-    BootCompleted,
-    BootFailed,
     CommandCompleted,
     CommandInvoked,
     ComposerChanged,
     ComposerSubmitted,
+    Connected,
+    ConnectFailed,
     EventReceived,
     Navigate,
     OperationFailed,
@@ -106,7 +106,7 @@ class Transition:
 def reduce(state: AppState, action: Action) -> Transition:
     """Apply one typed action without performing I/O or rendering."""
 
-    if isinstance(action, BootCompleted):
+    if isinstance(action, Connected):
         conversation = (
             {
                 "thread_id": None,
@@ -137,7 +137,7 @@ def reduce(state: AppState, action: Action) -> Transition:
                 **conversation,
             )
         )
-    if isinstance(action, BootFailed):
+    if isinstance(action, ConnectFailed):
         return Transition(
             _notice(replace(state, booting=False, connected=False), action.message, "error")
         )

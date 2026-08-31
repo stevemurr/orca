@@ -133,7 +133,7 @@ def threads(ctx: typer.Context) -> None:
         connection = resolve_connection(profile=options.profile, url=options.url)
         backend = HttpBackend(connection)
         try:
-            await backend.boot()
+            await backend.connect()
             return await backend.recent_threads()
         finally:
             await backend.close()

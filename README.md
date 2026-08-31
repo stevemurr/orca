@@ -25,11 +25,11 @@ methods and nothing else.
 
 ```python
 class TerminalBackend(Protocol):
-    async def boot(self) -> BootInfo: ...
+    async def connect(self) -> SessionInfo: ...
     async def start_run(self, request: RunRequest) -> RunInfo: ...
     def stream(self, run_id: str, *, after_seq: int, developer: bool) -> AsyncIterator[TaskEvent]: ...
     async def send_command(self, run_id: str, command: str, fields: dict[str, str]) -> dict[str, object]: ...
-    async def switch_workspace(self, selector: str) -> BootInfo: ...
+    async def switch_workspace(self, selector: str) -> SessionInfo: ...
     async def recent_threads(self) -> tuple[ThreadSummary, ...]: ...
     async def load_thread(self, thread_id: str) -> ThreadHistoryInfo: ...
     async def close(self) -> None: ...
@@ -37,14 +37,14 @@ class TerminalBackend(Protocol):
 
 | Method | What it must do |
 |---|---|
-| `boot()` | Connect, resolve the working folder, describe both. Called once, before anything else; everything expensive belongs here, where a failure is one legible message instead of a half-built session. |
+| `connect()` | Connect, resolve the working folder, describe both. Called once, before anything else; everything expensive belongs here, where a failure is one legible message instead of a half-built session. |
 | `start_run(request)` | Accept one turn and return its ids **immediately**. Do not wait for the work — everything after acceptance arrives through `stream`. A backend that blocks here freezes the terminal for the length of the task. |
 | `stream(run_id, after_seq, developer)` | Yield that run's events in `seq` order, starting after `after_seq`. An async generator, so no `await` on the call. Return when the run reaches a terminal event. |
 | `send_command(run_id, command, fields)` | Act on a run in flight: `pause`, `resume`, `cancel`, `steer`, `answer`, `resolve_approval`. Return a dict; its `status` key becomes a one-line notice. |
 | `switch_workspace(selector)` | Rebind the session to another folder, named however a person would name it — a path, a name, an id. Resolve it or raise; orca never guesses. |
 | `recent_threads()` | List conversations a person might continue, most recent first, as `ThreadSummary` rows. Only `thread_id` is required; the rest render as sensible blanks. Return `()` if you have no history. |
 | `load_thread(thread_id)` | Read one conversation's bounded history. Reading only — following a live run is `stream`'s job. |
-| `close()` | Release what `boot` acquired. Called once, on the way out. Durable work outlives the client, so this closes connections; it does not cancel runs. |
+| `close()` | Release what `connect` acquired. Called once, on the way out. Durable work outlives the client, so this closes connections; it does not cancel runs. |
 
 Every expected failure is a `BackendError`, and its message is shown to the person as written.
 Anything else reaches the terminal as a crash.
@@ -158,7 +158,7 @@ import itertools
 from collections.abc import AsyncIterator
 
 from orca.app.model import TaskEvent
-from orca.backend import BootInfo, RunInfo, RunRequest, ThreadHistoryInfo
+from orca.backend import SessionInfo, RunInfo, RunRequest, ThreadHistoryInfo
 from orca.tui.app import OrcaApp
 
 
@@ -167,8 +167,8 @@ class EchoBackend:
         self._runs = itertools.count(1)
         self._pending: dict[str, str] = {}
 
-    async def boot(self) -> BootInfo:
-        return BootInfo(
+    async def connect(self) -> SessionInfo:
+        return SessionInfo(
             profile="echo",
             endpoint="in-process",
             protocol_version="1",
@@ -200,8 +200,8 @@ class EchoBackend:
     async def send_command(self, run_id, command, fields) -> dict[str, object]:
         return {"status": "accepted"}
 
-    async def switch_workspace(self, selector: str) -> BootInfo:
-        return await self.boot()
+    async def switch_workspace(self, selector: str) -> SessionInfo:
+        return await self.connect()
 
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         return ()

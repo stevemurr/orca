@@ -10,7 +10,7 @@ from orca.app.model import TaskEvent, ThreadReplay, ViewId
 
 
 @dataclass(frozen=True, slots=True)
-class BootCompleted:
+class Connected:
     profile: str
     endpoint: str
     protocol_version: str
@@ -22,7 +22,7 @@ class BootCompleted:
 
 
 @dataclass(frozen=True, slots=True)
-class BootFailed:
+class ConnectFailed:
     message: str
 
 
@@ -104,8 +104,8 @@ class CommandCompleted:
 
 
 Action = (
-    BootCompleted
-    | BootFailed
+    Connected
+    | ConnectFailed
     | Navigate
     | Back
     | ViewportChanged

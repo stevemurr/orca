@@ -169,9 +169,9 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
         workspace_resolver=fixed_workspace,
     )
 
-    boot = await backend.boot()
+    session = await backend.connect()
     run = await backend.start_run(
-        RunRequest("Build it", None, boot.workspace_id, boot.cwd_relative, "auto", "safe")
+        RunRequest("Build it", None, session.workspace_id, session.cwd_relative, "auto", "safe")
     )
     streamed = [item async for item in backend.stream(run.run_id, after_seq=0, developer=False)]
     command = await backend.send_command(run.run_id, "pause", {})
@@ -179,8 +179,8 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
     history = await backend.load_thread("thread-1")
     await backend.close()
 
-    assert boot.workspace_path == "/tmp/project"
-    assert boot.protocol_version == "1.6"
+    assert session.workspace_path == "/tmp/project"
+    assert session.protocol_version == "1.6"
     assert run.thread_id == "thread-1"
     assert client.created_runs[0]["client_context"] == {"cwd_relative": "."}
     assert str(client.created_runs[0]["idempotency_key"]).startswith("idem_")

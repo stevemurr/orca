@@ -43,10 +43,10 @@ class BackendError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class BootInfo:
+class SessionInfo:
     """Who orca is talking to, and which folder the work happens in.
 
-    Returned by `boot()` and again by `switch_workspace()`; the header, the welcome panel and
+    Returned by `connect()` and again by `switch_workspace()`; the header, the welcome panel and
     every `start_run` request are built from it.
     """
 
@@ -130,7 +130,7 @@ class ThreadSummary:
 class TerminalBackend(Protocol):
     """All I/O the terminal may request, kept outside widgets and reducers."""
 
-    async def boot(self) -> BootInfo:
+    async def connect(self) -> SessionInfo:
         """Connect, resolve the working folder, and describe both.
 
         Called once at startup, before anything else. Everything expensive — starting a local
@@ -198,12 +198,12 @@ class TerminalBackend(Protocol):
         """
         ...
 
-    async def switch_workspace(self, selector: str) -> BootInfo:
+    async def switch_workspace(self, selector: str) -> SessionInfo:
         """Rebind the session to another folder, named however a person would name it.
 
         `selector` is whatever followed `/workspace` — a path, a name, an id. Resolve it or
         raise `BackendError`; orca never guesses on the backend's behalf. Only called while no
-        run is active, and the returned `BootInfo` resets the conversation.
+        run is active, and the returned `SessionInfo` resets the conversation.
         """
         ...
 
@@ -225,7 +225,7 @@ class TerminalBackend(Protocol):
         ...
 
     async def close(self) -> None:
-        """Release whatever `boot` acquired. Called exactly once, on the way out.
+        """Release whatever `connect` acquired. Called exactly once, on the way out.
 
         Durable work is expected to outlive the client, so this closes connections; it does not
         cancel runs.

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 
 from orca.app.actions import EventReceived, RunAccepted
 from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
-from orca.backend import BackendError, BootInfo, RunInfo, ThreadHistoryInfo, ThreadSummary
+from orca.backend import BackendError, RunInfo, SessionInfo, ThreadHistoryInfo, ThreadSummary
 from orca.tui.app import OrcaApp
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
 from orca.tui.widgets import Composer
@@ -23,8 +23,8 @@ class FakeBackend:
         self.streams: list[tuple[str, int, bool]] = []
         self.closed = False
 
-    async def boot(self) -> BootInfo:
-        return BootInfo(
+    async def connect(self) -> SessionInfo:
+        return SessionInfo(
             profile="local",
             endpoint="http://127.0.0.1:8420",
             protocol_version="1.6",
@@ -74,7 +74,7 @@ class FakeBackend:
         self.commands.append((run_id, command, fields))
         return {"status": "accepted"}
 
-    async def switch_workspace(self, selector: str) -> BootInfo:
+    async def switch_workspace(self, selector: str) -> SessionInfo:
         raise AssertionError(f"unexpected workspace switch: {selector}")
 
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
