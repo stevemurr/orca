@@ -147,18 +147,55 @@ def test_runtime_resolution_never_reads_a_worktree_dotenv(
     assert connection.credential_source is CredentialSource.NONE
 
 
-def test_remote_plaintext_http_requires_an_explicit_override(tmp_path: Path) -> None:
+def test_a_credential_is_never_sent_to_a_remote_http_endpoint(tmp_path: Path) -> None:
+    """The rule is about sending a secret in the clear, so it needs a secret to be about."""
     arguments = {
         "url": "http://orch.example:8420",
-        "environ": {},
+        "environ": {"ORCA_AUTH_TOKEN": "secret"},
         "config": ConfigRepository(home=tmp_path / "config"),
         "credentials": _Credentials(),
     }
-    with pytest.raises(InsecureEndpointError, match="HTTPS"):
+    with pytest.raises(InsecureEndpointError, match="in the clear"):
         resolve_connection(**arguments)
 
     allowed = resolve_connection(**arguments, allow_insecure_http=True)
     assert allowed.endpoint == "http://orch.example:8420"
+    assert allowed.token == "secret"
+
+
+def test_an_anonymous_remote_http_endpoint_is_allowed(tmp_path: Path) -> None:
+    """This test used to assert the opposite, with an empty credential store -- so it was
+    pinning a refusal to send credentials that did not exist, which is how the bug survived.
+
+    Reported from a real setup on 2026-08-31: a profile pointing at a LAN harness over plain
+    HTTP, no token anywhere, refused with "refusing to send credentials". The check ran before
+    the credential was resolved and could not know there was none. An unauthenticated
+    connection over HTTP leaks nothing of the user's; a token over HTTP leaks the token.
+    """
+    connection = resolve_connection(
+        url="http://192.168.1.237:8000",
+        environ={},
+        config=ConfigRepository(home=tmp_path / "config"),
+        credentials=_Credentials(),
+    )
+
+    assert connection.endpoint == "http://192.168.1.237:8000"
+    assert connection.token == ""
+    assert connection.credential_source is CredentialSource.NONE
+
+
+def test_a_keyring_credential_is_protected_too(tmp_path: Path) -> None:
+    """Not only the environment: whichever source supplied it, it is still a secret."""
+    store = _Credentials()
+    store.set("default", "http://orch.example:8420", "from-keyring")
+
+    with pytest.raises(InsecureEndpointError, match="in the clear"):
+        resolve_connection(
+            url="http://orch.example:8420",
+            environ={},
+            config=ConfigRepository(home=tmp_path / "config"),
+            credentials=store,
+        )
 
 
 def test_token_file_is_an_explicit_headless_credential_source(tmp_path: Path) -> None:

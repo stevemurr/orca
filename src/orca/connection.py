@@ -474,12 +474,6 @@ def resolve_connection(
             environment.get(ALLOW_INSECURE_HTTP_ENV), name=ALLOW_INSECURE_HTTP_ENV
         )
     )
-    if urlsplit(endpoint).scheme == "http" and not _is_loopback(endpoint) and not insecure_allowed:
-        raise InsecureEndpointError(
-            "refusing to send credentials to a remote HTTP endpoint; use HTTPS or explicitly "
-            f"set {ALLOW_INSECURE_HTTP_ENV}=true"
-        )
-
     if env_token.strip():
         token = _validated_token(env_token)
         source = CredentialSource.ENVIRONMENT
@@ -497,6 +491,25 @@ def resolve_connection(
             stored = None
         token = _validated_token(stored) if stored else ""
         source = CredentialSource.KEYRING if token else CredentialSource.NONE
+
+    # Checked here, after the credential is resolved, because the rule is about sending a
+    # secret in the clear and until this point nothing knows whether there is one. It used
+    # to run before the lookup and refused every plain-HTTP endpoint off the loopback --
+    # including anonymous ones, where the message "refusing to send credentials" named
+    # something that did not exist. Reported from a real setup, 2026-08-31.
+    #
+    # An unauthenticated connection over HTTP leaks nothing of the user's, so it is theirs
+    # to make. A token over HTTP leaks the token, which is not.
+    if (
+        token
+        and urlsplit(endpoint).scheme == "http"
+        and not _is_loopback(endpoint)
+        and not insecure_allowed
+    ):
+        raise InsecureEndpointError(
+            f"refusing to send the {source.value} credential to {endpoint} in the clear. "
+            f"Use HTTPS, or set {ALLOW_INSECURE_HTTP_ENV}=true to accept the risk."
+        )
 
     return Connection(
         profile=selected_profile,
