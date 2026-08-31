@@ -187,7 +187,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
     assert [item.kind for item in streamed] == ["run.created"]
     assert command == {"status": "accepted"}
     assert str(client.commands[0]["command_id"]).startswith("cmd_")
-    assert threads[0]["thread_id"] == "thread-1"
+    assert threads[0].thread_id == "thread-1"
     assert [run.run_id for run in history.runs] == ["run-1", "run-2"]
     assert [event.kind for event in history.runs[0].events] == [
         "run.created",

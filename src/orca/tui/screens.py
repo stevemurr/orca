@@ -16,6 +16,7 @@ from textual.widgets.option_list import Option
 
 from orca.app.actions import ApprovalDecided
 from orca.app.model import AppState
+from orca.backend import ThreadSummary
 from orca.tui.render import render_help, render_interaction
 
 
@@ -40,17 +41,10 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
 
     BINDINGS = (Binding("escape", "close", "Close", show=False),)
 
-    def __init__(self, rows: tuple[dict[str, object], ...]) -> None:
+    def __init__(self, rows: tuple[ThreadSummary, ...]) -> None:
         super().__init__()
         self._rows = rows
-        self._choices = {
-            str(row.get("thread_id") or ""): (
-                str(row.get("thread_id") or ""),
-                str(row.get("title") or ""),
-            )
-            for row in rows
-            if row.get("thread_id")
-        }
+        self._choices = {row.thread_id: (row.thread_id, row.title) for row in rows}
 
     def compose(self) -> ComposeResult:
         with Container(classes="modal-card thread-card"):
@@ -59,11 +53,7 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
                 yield Static("No conversations yet.", classes="empty-state")
             else:
                 yield OptionList(
-                    *(
-                        Option(_thread_prompt(row), id=str(row["thread_id"]))
-                        for row in self._rows
-                        if row.get("thread_id")
-                    ),
+                    *(Option(_thread_prompt(row), id=row.thread_id) for row in self._rows),
                     id="thread-options",
                 )
             yield Static("Enter continue  ·  Esc close", classes="modal-hint")
@@ -137,10 +127,10 @@ class ApprovalScreen(ModalScreen[None]):
         return render_interaction(self._state, width=width)
 
 
-def _thread_prompt(row: dict[str, object]) -> Text:
-    title = str(row.get("title") or "Untitled conversation")
-    status = str(row.get("latest_run_status") or "idle").replace("_", " ")
-    updated = _display_timestamp(str(row.get("updated_at") or ""))
+def _thread_prompt(row: ThreadSummary) -> Text:
+    title = row.title or "Untitled conversation"
+    status = (row.latest_run_status or "idle").replace("_", " ")
+    updated = _display_timestamp(row.updated_at)
     detail = status if not updated else f"{status}  ·  {updated}"
     prompt = Text(title, style="bold")
     prompt.append(f"\n{detail}", style="dim")

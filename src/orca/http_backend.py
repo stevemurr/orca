@@ -20,6 +20,7 @@ from orca.backend import (
     RunInfo,
     RunRequest,
     ThreadHistoryInfo,
+    ThreadSummary,
 )
 from orca.client import ApiError, HttpApiClient, SSEEvent
 from orca.connection import Connection
@@ -187,7 +188,7 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
         return self._boot_info()
 
-    async def recent_threads(self) -> tuple[dict[str, object], ...]:
+    async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         binding = self._require_binding()
         try:
             body = await self._client.list_threads(
@@ -199,7 +200,18 @@ class HttpBackend:
         rows = body.get("threads")
         if not isinstance(rows, list):
             return ()
-        return tuple(cast(dict[str, object], row) for row in rows if isinstance(row, dict))
+        # A row without a thread_id cannot be continued, so it is dropped here rather than
+        # rendered as an entry that does nothing when chosen.
+        return tuple(
+            ThreadSummary(
+                thread_id=str(row["thread_id"]),
+                title=str(row.get("title") or ""),
+                latest_run_status=str(row.get("latest_run_status") or ""),
+                updated_at=str(row.get("updated_at") or ""),
+            )
+            for row in rows
+            if isinstance(row, dict) and row.get("thread_id")
+        )
 
     async def load_thread(self, thread_id: str) -> ThreadHistoryInfo:
         """Read bounded canonical history without attaching a second live cursor."""

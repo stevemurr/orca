@@ -30,7 +30,7 @@ class TerminalBackend(Protocol):
     def stream(self, run_id: str, *, after_seq: int, developer: bool) -> AsyncIterator[TaskEvent]: ...
     async def send_command(self, run_id: str, command: str, fields: dict[str, str]) -> dict[str, object]: ...
     async def switch_workspace(self, selector: str) -> BootInfo: ...
-    async def recent_threads(self) -> tuple[dict[str, object], ...]: ...
+    async def recent_threads(self) -> tuple[ThreadSummary, ...]: ...
     async def load_thread(self, thread_id: str) -> ThreadHistoryInfo: ...
     async def close(self) -> None: ...
 ```
@@ -42,7 +42,7 @@ class TerminalBackend(Protocol):
 | `stream(run_id, after_seq, developer)` | Yield that run's events in `seq` order, starting after `after_seq`. An async generator, so no `await` on the call. Return when the run reaches a terminal event. |
 | `send_command(run_id, command, fields)` | Act on a run in flight: `pause`, `resume`, `cancel`, `steer`, `answer`, `resolve_approval`. Return a dict; its `status` key becomes a one-line notice. |
 | `switch_workspace(selector)` | Rebind the session to another folder, named however a person would name it — a path, a name, an id. Resolve it or raise; orca never guesses. |
-| `recent_threads()` | List conversations a person might continue, most recent first. Rows are read for `thread_id`, `title`, `latest_run_status`, `updated_at`; everything else is ignored. Return `()` if you have no history. |
+| `recent_threads()` | List conversations a person might continue, most recent first, as `ThreadSummary` rows. Only `thread_id` is required; the rest render as sensible blanks. Return `()` if you have no history. |
 | `load_thread(thread_id)` | Read one conversation's bounded history. Reading only — following a live run is `stream`'s job. |
 | `close()` | Release what `boot` acquired. Called once, on the way out. Durable work outlives the client, so this closes connections; it does not cancel runs. |
 
@@ -203,7 +203,7 @@ class EchoBackend:
     async def switch_workspace(self, selector: str) -> BootInfo:
         return await self.boot()
 
-    async def recent_threads(self) -> tuple[dict[str, object], ...]:
+    async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         return ()
 
     async def load_thread(self, thread_id: str) -> ThreadHistoryInfo:

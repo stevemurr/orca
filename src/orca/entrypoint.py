@@ -14,7 +14,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from orca.auth import auth_app
-from orca.backend import BackendError, RunRequest
+from orca.backend import BackendError, RunRequest, ThreadSummary
 from orca.connection import (
     ConnectionConfigError,
     CredentialBackendUnavailable,
@@ -129,7 +129,7 @@ def threads(ctx: typer.Context) -> None:
 
     options = _options(ctx)
 
-    async def execute() -> tuple[dict[str, object], ...]:
+    async def execute() -> tuple[ThreadSummary, ...]:
         connection = resolve_connection(profile=options.profile, url=options.url)
         backend = HttpBackend(connection)
         try:
@@ -144,11 +144,7 @@ def threads(ctx: typer.Context) -> None:
     table.add_column(ratio=1)
     table.add_column(no_wrap=True, style="dim")
     for row in rows:
-        table.add_row(
-            str(row.get("thread_id") or ""),
-            str(row.get("title") or ""),
-            str(row.get("latest_run_status") or ""),
-        )
+        table.add_row(row.thread_id, row.title, row.latest_run_status)
     console.print(table)
 
 

@@ -107,6 +107,26 @@ class ThreadHistoryInfo:
     runs: tuple[ThreadReplay, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ThreadSummary:
+    """One conversation, as a listing shows it.
+
+    Typed rather than a loose dict, which is what this was until 2026-08-30. It was the only
+    method on the protocol returning `dict[str, object]`, so its docstring had to name the
+    four keys it read -- a harness author learned the shape from prose in the one place they
+    could not get it from the type. Every field but `thread_id` is optional and renders as a
+    sensible blank, so a backend that tracks nothing but ids still lists correctly.
+    """
+
+    thread_id: str
+    title: str = ""
+    #: How the most recent run in this thread ended. Backend vocabulary, shown as written --
+    #: orca does not interpret it, so a backend with its own statuses is not constrained.
+    latest_run_status: str = ""
+    #: ISO-8601 if you have it. Anything unparseable is simply not shown.
+    updated_at: str = ""
+
+
 class TerminalBackend(Protocol):
     """All I/O the terminal may request, kept outside widgets and reducers."""
 
@@ -187,12 +207,11 @@ class TerminalBackend(Protocol):
         """
         ...
 
-    async def recent_threads(self) -> tuple[dict[str, object], ...]:
+    async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         """List conversations a person might continue, most recent first.
 
-        Deliberately loose: each row is read for `thread_id` (required), `title`,
-        `latest_run_status` and `updated_at`, and everything else is ignored. A backend with no
-        conversation history returns an empty tuple and `/threads` says so.
+        A backend with no conversation history returns an empty tuple and `/threads` says so.
+        Rows without a `thread_id` cannot be continued and are dropped rather than shown.
         """
         ...
 
