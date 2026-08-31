@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca.backend import CommandOutcome, Pause, RunRequest
-from orca.client import SSEEvent
+import pytest
+
+from orca.backend import BackendError, CommandOutcome, Pause, RunRequest
+from orca.client import ApiError, SSEEvent
 from orca.connection import Connection, CredentialSource
 from orca.http_backend import HttpBackend, normalize_event
 from orca.workspace_context import WorkspaceBinding
@@ -194,3 +196,25 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
         "run.completed",
     ]
     assert client.closed
+
+
+async def test_a_server_that_is_not_a_harness_says_so() -> None:
+    """Reported from a real setup: a profile pointed at an OpenAI-compatible model gateway --
+    a real server, answering, on the port the person had in mind -- and the failure they saw
+    was about a keyring credential. A 404 on /capabilities means something is listening and
+    it is not a backend, and saying that points at the actual mistake. (2026-08-31)
+    """
+
+    class NotAHarness(FakeClient):
+        async def capabilities(self):
+            raise ApiError(404, "not_found", "Not Found")
+
+    backend = HttpBackend(
+        connection(),
+        client=NotAHarness(),  # type: ignore[arg-type]
+        server_ensurer=no_server,
+        workspace_resolver=fixed_workspace,
+    )
+
+    with pytest.raises(BackendError, match="not a harness"):
+        await backend.connect()

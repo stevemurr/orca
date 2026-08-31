@@ -22,7 +22,13 @@ from types import MappingProxyType
 from typing import Protocol
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-DEFAULT_ORIGIN = "http://127.0.0.1:8420"
+#: Where a harness listens by default, so `orca` with no configuration reaches one.
+#:
+#: 8420 until 2026-08-31, which was the port of the project this client was extracted from.
+#: That project's server is still installed on the author's machine and still answers there,
+#: so an unconfigured orca connected to the wrong backend and got plausible answers from it.
+#: A default that reaches something is worse than one that reaches nothing.
+DEFAULT_ORIGIN = "http://127.0.0.1:8080"
 DEFAULT_PROFILE = "default"
 CONFIG_HOME_ENV = "ORCA_CONFIG_HOME"
 PROFILE_ENV = "ORCA_PROFILE"

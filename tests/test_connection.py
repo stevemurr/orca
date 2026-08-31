@@ -121,7 +121,7 @@ def test_exported_token_cannot_be_combined_with_a_worktree_dotenv_url(
         credentials=_Credentials(),
     )
 
-    assert connection.endpoint == "http://127.0.0.1:8420"
+    assert connection.endpoint == "http://127.0.0.1:8080"
     assert connection.token == "exported-token"
     assert connection.credential_source is CredentialSource.ENVIRONMENT
 
@@ -142,7 +142,7 @@ def test_runtime_resolution_never_reads_a_worktree_dotenv(
         credentials=_Credentials(),
     )
 
-    assert connection.endpoint == "http://127.0.0.1:8420"
+    assert connection.endpoint == "http://127.0.0.1:8080"
     assert connection.token == ""
     assert connection.credential_source is CredentialSource.NONE
 
@@ -220,7 +220,7 @@ def test_unauthenticated_loopback_runtime_does_not_require_a_keyring(tmp_path: P
         credentials=_UnavailableCredentials(),
     )
 
-    assert connection.endpoint == "http://127.0.0.1:8420"
+    assert connection.endpoint == "http://127.0.0.1:8080"
     assert connection.token == ""
     assert connection.credential_source is CredentialSource.NONE
 

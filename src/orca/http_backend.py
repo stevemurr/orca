@@ -142,7 +142,7 @@ class HttpBackend:
     async def connect(self) -> SessionInfo:
         try:
             await self._server_ensurer(self.connection)
-            discovery = await self._client.capabilities()
+            discovery = await self._capabilities_or_say_why()
             self._binding = await self._workspace_resolver(
                 self._client,
                 selector=self._workspace_selector,
@@ -153,6 +153,27 @@ class HttpBackend:
 
         self._protocol_version = str(discovery.get("protocol_version") or "?")
         return self._session_info()
+
+    async def _capabilities_or_say_why(self) -> dict[str, Any]:
+        """The first request of every session, and the one that says what is on the far end.
+
+        A 404 here means something is listening and it is not a harness. Reporting the raw
+        status sends a person to look at their credentials or their token, which is what
+        happened: a profile pointed at an OpenAI-compatible model gateway -- a real server,
+        answering, on the port they had in mind -- and the failure they saw was about a
+        keyring entry. Naming the endpoint and what was expected there points at the actual
+        mistake. (2026-08-31)
+        """
+        try:
+            return await self._client.capabilities()
+        except ApiError as exc:
+            if exc.status in {404, 405}:
+                raise BackendError(
+                    f"{self.connection.endpoint} answered, but it is not a harness: "
+                    f"GET /capabilities returned {exc.status}. Check the URL points at the "
+                    "backend rather than at a model endpoint or another service."
+                ) from exc
+            raise
 
     async def start_run(self, request: RunRequest) -> RunInfo:
         binding = self._require_binding()
