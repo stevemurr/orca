@@ -57,6 +57,22 @@ class CredentialBackendUnavailable(RuntimeError):
     """No usable secure credential backend is available."""
 
 
+class EndpointSource(str, Enum):
+    """Where the endpoint came from, so a report can say when a file was bypassed.
+
+    `auth status` printed the profile name beside the endpoint and nothing else, so an
+    `ORCA_URL` in the environment silently overrode `config.toml` while the output still
+    named the profile -- a person reading it would check the file and find it correct.
+    Reported 2026-08-31. Modelled on `CredentialSource`, which already answers the same
+    question about the token.
+    """
+
+    FLAG = "--url"
+    ENVIRONMENT = "ORCA_URL"
+    PROFILE = "profile"
+    DEFAULT = "built-in default"
+
+
 class CredentialSource(str, Enum):
     NONE = "none"
     KEYRING = "keyring"
@@ -318,6 +334,7 @@ class Connection:
     endpoint: str
     token: str = field(default="", repr=False)
     credential_source: CredentialSource = CredentialSource.NONE
+    endpoint_source: EndpointSource = EndpointSource.PROFILE
 
     @property
     def authenticated(self) -> bool:
@@ -466,11 +483,15 @@ def resolve_connection(
             f"profile {selected_profile!r} does not exist; provide --url when creating it"
         )
 
-    endpoint_value = (
-        url
-        if url is not None
-        else env_url or (selected.endpoint if selected is not None else "") or DEFAULT_ORIGIN
-    )
+    profile_url = selected.endpoint if selected is not None else ""
+    if url is not None:
+        endpoint_value, endpoint_source = url, EndpointSource.FLAG
+    elif env_url:
+        endpoint_value, endpoint_source = env_url, EndpointSource.ENVIRONMENT
+    elif profile_url:
+        endpoint_value, endpoint_source = profile_url, EndpointSource.PROFILE
+    else:
+        endpoint_value, endpoint_source = DEFAULT_ORIGIN, EndpointSource.DEFAULT
     endpoint = canonical_endpoint(endpoint_value)
 
     insecure_allowed = (
@@ -522,4 +543,5 @@ def resolve_connection(
         endpoint=endpoint,
         token=token,
         credential_source=source,
+        endpoint_source=endpoint_source,
     )

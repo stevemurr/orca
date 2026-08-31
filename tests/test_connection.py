@@ -14,6 +14,7 @@ from orca.connection import (
     ConnectionConfigError,
     CredentialBackendUnavailable,
     CredentialSource,
+    EndpointSource,
     InsecureEndpointError,
     canonical_endpoint,
     resolve_connection,
@@ -302,3 +303,31 @@ def test_auth_cli_uses_a_hidden_prompt_and_surfaces_missing_keychain(tmp_path: P
     assert unavailable.exit_code == 1
     assert "credential backend" in unavailable.output.lower()
     assert "plaintext" not in unavailable.output.lower()
+
+
+def test_the_endpoint_reports_where_it_came_from(tmp_path: Path) -> None:
+    """`auth status` printed the profile name beside the endpoint and nothing else, so an
+    ORCA_URL silently overrode config.toml while the output still named the profile -- a
+    person reading it would check the file and find it correct. (2026-08-31)"""
+    config = ConfigRepository(home=tmp_path / "config")
+    config.upsert_profile("default", "http://127.0.0.1:8080")
+    common = {"config": config, "credentials": _Credentials()}
+
+    from_profile = resolve_connection(environ={}, **common)
+    assert from_profile.endpoint_source is EndpointSource.PROFILE
+
+    from_env = resolve_connection(environ={"ORCA_URL": "http://127.0.0.1:9999"}, **common)
+    assert from_env.endpoint_source is EndpointSource.ENVIRONMENT
+    assert from_env.endpoint == "http://127.0.0.1:9999"
+
+    from_flag = resolve_connection(url="http://127.0.0.1:7777", environ={}, **common)
+    assert from_flag.endpoint_source is EndpointSource.FLAG
+
+
+def test_the_built_in_default_says_it_is_one(tmp_path: Path) -> None:
+    connection = resolve_connection(
+        environ={}, config=ConfigRepository(home=tmp_path / "config"), credentials=_Credentials()
+    )
+
+    assert connection.endpoint_source is EndpointSource.DEFAULT
+    assert connection.endpoint == "http://127.0.0.1:8080"

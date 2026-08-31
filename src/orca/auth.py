@@ -21,6 +21,7 @@ from orca.connection import (
     CredentialBackendUnavailable,
     CredentialSource,
     CredentialStore,
+    EndpointSource,
     KeyringCredentialStore,
     current_connection_selection,
     resolve_connection,
@@ -200,9 +201,19 @@ def create_auth_app(
             )
         except (ConnectionConfigError, CredentialBackendUnavailable, OSError) as exc:
             fail(exc)
+        # The endpoint's source, not only its value. Printing the profile name beside an
+        # endpoint that came from ORCA_URL sends a person to check a file that is correct.
+        origin = connection.endpoint_source
         _receipt(
             ("profile", connection.profile),
-            ("server", connection.endpoint),
+            (
+                "server",
+                connection.endpoint
+                if origin is EndpointSource.PROFILE
+                else f"{connection.endpoint}  (from {origin.value}, overriding the profile)"
+                if origin is not EndpointSource.DEFAULT
+                else f"{connection.endpoint}  (built-in default; no profile url set)",
+            ),
         )
         if connection.authenticated:
             _receipt(
