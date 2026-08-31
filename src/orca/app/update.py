@@ -510,6 +510,13 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
     if kind == "run.paused":
         return Transition(replace(state, run_status=RunStatus.PAUSED))
 
+    if kind == "run.resumed":
+        # The contract listed `run.paused` and no way back, so a resumed run read as paused
+        # until it ended. Neither side was violating anything -- unknown events are ignorable
+        # by design, so the backend emitted this and orca dropped it. The hole was in the
+        # contract: a state you can enter and not leave. (2026-08-30)
+        return Transition(replace(state, run_status=RunStatus.RUNNING))
+
     terminal = {
         "run.completed": RunStatus.COMPLETED,
         "run.failed": RunStatus.FAILED,

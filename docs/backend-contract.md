@@ -223,6 +223,7 @@ which is the one failure this rule exists to prevent.
 | `question.requested` | `question_id`, `prompt` | Inline above the composer; the next thing typed is the answer. |
 | `question.resolved` | — | Dismisses it. |
 | `run.paused` | — | Not terminal. |
+| `run.resumed` | — | Not terminal. Undoes `run.paused`; without it a paused run reads as paused until it ends. |
 | `run.completed` / `.failed` / `.cancelled` / `.blocked` | `summary` | Terminal. Exactly one, nothing after it. `summary` replaces the streamed answer. |
 
 Anything else advances the cursor and is otherwise ignored — which is what makes adding an event

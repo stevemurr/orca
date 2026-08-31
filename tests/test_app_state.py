@@ -12,7 +12,7 @@ from orca.app.actions import (
     ThreadSelected,
 )
 from orca.app.commands import ParsedCommand, parse_input
-from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
+from orca.app.model import AppState, RunStatus, TaskEvent, ThreadReplay, ViewId
 from orca.app.update import FollowRun, LoadThread, reduce
 
 
@@ -289,3 +289,22 @@ def test_a_plan_event_without_a_list_changes_nothing_but_the_cursor() -> None:
 
     assert [step.step for step in state.turns[-1].plan] == ["one"]
     assert state.cursor == 2
+
+
+def test_a_resumed_run_stops_reading_as_paused() -> None:
+    """`run.paused` had no counterpart, so a resumed run showed "paused" until it ended.
+
+    Neither side was at fault: unknown events are ignorable by design, so the backend emitted
+    `run.resumed` and orca dropped it. The hole was in the contract -- a state you could enter
+    and not leave. (2026-08-30)
+    """
+    state = feed(
+        AppState(),
+        event(1, "run.created", {"message": "do it"}),
+        event(2, "run.paused", {}),
+    )
+    assert state.run_status is RunStatus.PAUSED
+
+    resumed = feed(state, event(3, "run.resumed", {}))
+
+    assert resumed.run_status is RunStatus.RUNNING
