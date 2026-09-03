@@ -32,7 +32,7 @@ from orca.app.actions import (
     ViewportChanged,
 )
 from orca.app.commands import CommandSpec, spec_for, suggest
-from orca.app.model import AppState, ViewId
+from orca.app.model import Activity, AppState, ViewId
 from orca.app.update import (
     AddFolder,
     Effect,
@@ -304,14 +304,21 @@ class OrcaApp(App[None]):
         if not (self.model.working or self.model.notices):
             return
         now = time.monotonic()
-        if not self._tool_working() and now - self.model.clock < 0.5:
+        if not self._shining() and now - self.model.clock < 0.5:
             return
         self.apply_model_action(ClockTicked(now))
 
-    def _tool_working(self) -> bool:
+    def _shining(self) -> bool:
+        """Whether a tool row is lit right now, which is what needs the fast clock: a call
+        in progress, or the working turn's latest group with nothing after it yet."""
         if not self.model.working or not self.model.turns:
             return False
-        return any(item.status.lower() == "active" for item in self.model.turns[-1].progress)
+        turn = self.model.turns[-1]
+        if turn.run_id != self.model.active_run_id:
+            return False
+        if any(item.status.lower() == "active" for item in turn.progress):
+            return True
+        return bool(turn.timeline) and isinstance(turn.timeline[-1], Activity)
 
     def on_resize(self, event: events.Resize) -> None:
         self.apply_model_action(ViewportChanged(event.size.width, event.size.height))

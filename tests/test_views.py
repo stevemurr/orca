@@ -6,7 +6,7 @@ from dataclasses import replace
 from io import StringIO
 
 from rich.color import Color
-from rich.console import Console
+from rich.console import Console, RenderableType
 
 from orca.app.model import (
     AppState,
@@ -417,3 +417,42 @@ def test_the_working_tool_row_carries_a_shine_that_moves_with_the_clock() -> Non
     lit_early = {span.start for span in early.spans if "white" in str(span.style)}
     lit_later = {span.start for span in later.spans if "white" in str(span.style)}
     assert lit_early and lit_later and lit_early != lit_later
+
+
+def test_the_latest_group_of_a_working_turn_shines_between_calls() -> None:
+    from orca.app.model import Activity, Narration
+    from orca.tui.render.conversation import _activity_table  # pyright: ignore[reportPrivateUsage]
+
+    calls = tuple(
+        ProgressItem(f"c{n}", f"read file{n}.py", "completed", kind="read") for n in range(3)
+    )
+    state = replace(populated_state(), clock=0.3)
+
+    live = _activity_table(list(calls), state, live=True)
+    still = _activity_table(list(calls), state, live=False)
+    finished = _activity_table(
+        list(calls), replace(state, run_status=RunStatus.COMPLETED, active_run_id=None), live=False
+    )
+
+    def shines(renderable: RenderableType) -> bool:
+        console = Console(force_terminal=True, color_system="truecolor", width=90)
+        return any(
+            segment.style is not None
+            and segment.style.color is not None
+            and segment.style.color.name == "white"
+            for segment in console.render(renderable)
+        )
+
+    assert shines(live)
+    assert not shines(still)
+    assert not shines(finished)
+
+    # In the transcript: the group at the end of the working turn, and nothing after it.
+    turn = TurnState(
+        "run-1",
+        request="Read them",
+        progress=calls,
+        timeline=(Narration("Looking."), *(Activity(c.update_id) for c in calls)),
+    )
+    rendered = plain(render_conversation(replace(state, turns=(turn,)), width=90), width=90)
+    assert "read file2.py  ·  3 tool calls ›" in rendered

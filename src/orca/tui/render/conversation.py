@@ -58,7 +58,10 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 # Consecutive rows share one table so their glyphs line up.
                 # A blank line either side: rows sit between paragraphs of the model's
                 # own words, and against them they read as part of the sentence.
-                rows.append(Padding(_activity_table(pending, state), (1, 1)))
+                # The group at the end of a working turn is what the agent is on now,
+                # between one call and the next: it shines like a running call does.
+                tail = segment is None and turn.run_id == state.active_run_id and state.working
+                rows.append(Padding(_activity_table(pending, state, live=tail), (1, 1)))
                 pending = []
             if isinstance(segment, Narration):
                 if not narrated:
@@ -178,9 +181,13 @@ def _timeline(turn: TurnState) -> tuple[Segment, ...]:
     return (*rows, *turn.notes, *((Narration(answer),) if answer else ()))
 
 
-def _activity_table(items: list[ProgressItem], state: AppState) -> RenderableType:
+def _activity_table(
+    items: list[ProgressItem], state: AppState, *, live: bool = False
+) -> RenderableType:
     """A run of tool calls. Folded, it is the latest call and a count -- the one a person
-    is watching, and how much came before it; `/tools` or Ctrl+T shows them all."""
+    is watching, and how much came before it; `/tools` or Ctrl+T shows them all. `live`
+    says the group is the working turn's latest, so its last row shines even between
+    calls."""
     activity = Table.grid(padding=(0, 1))
     activity.add_column(width=2, no_wrap=True)
     activity.add_column(ratio=1, overflow="fold")
@@ -189,7 +196,8 @@ def _activity_table(items: list[ProgressItem], state: AppState) -> RenderableTyp
     for item in shown:
         glyph, style, text_style = _activity_look(item)
         count = f"  ·  {folded + 1} tool calls ›" if folded else ""
-        if item.status.lower() == "active" and state.working:
+        running = item.status.lower() == "active" and state.working
+        if running or (live and item is shown[-1] and item.status.lower() != "failed"):
             # The whole line shines, count included: folded, the count is part of what a
             # person is watching.
             line = shimmer(item.text + count, state.clock)
