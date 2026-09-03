@@ -7,6 +7,7 @@ from rich.console import Group, RenderableType
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.styled import Styled
 from rich.table import Table
 from rich.text import Text
 
@@ -321,7 +322,22 @@ def _approval_row(record: ApprovalRecord) -> RenderableType:
     return Group(line, Text(f"  $ {record.command}", style=MUTED, overflow="fold"))
 
 
-def _note_row(note: TurnNote) -> Text:
-    glyph = {"compaction": "⇥", "steer": "↳", "folder": "+", "ended": "■"}[note.kind]
+#: A box with a left edge and nothing else, for words the person sent while the run was
+#: going: quoted, the way a reply quotes what it answers, and quieter than the request that
+#: opened the turn.
+_QUOTE = box.Box("    \n▎   \n▎   \n▎   \n▎   \n▎   \n▎   \n    \n")
+
+
+def _note_row(note: TurnNote) -> RenderableType:
+    if note.kind == "steer":
+        return Panel(
+            Styled(answer_markdown(note.text), f"italic {MUTED}"),
+            box=_QUOTE,
+            border_style=MUTED,
+            title=Text("you · mid-run", style=f"italic {MUTED}"),
+            title_align="left",
+            padding=(0, 1),
+        )
+    glyph = {"compaction": "⇥", "folder": "+", "ended": "■"}[note.kind]
     style = WARNING if note.kind == "ended" else ACCENT
     return Text.assemble((f"{glyph} ", style), (note.text, f"italic {MUTED}"))

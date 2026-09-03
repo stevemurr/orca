@@ -497,3 +497,27 @@ def test_an_approval_is_asked_at_the_end_of_its_turn_and_its_answer_stays() -> N
     rendered = plain(render_conversation(kept, width=90), width=90)
     assert "✓ Approved  Run the tests?" in rendered
     assert "1 approve once" not in rendered
+
+
+def test_a_message_sent_mid_run_is_quoted_in_the_transcript_where_it_arrived() -> None:
+    from orca.app.model import Activity, Narration, TurnNote
+
+    turn = TurnState(
+        "run-1",
+        request="Fix the parser",
+        progress=(ProgressItem("ls", "read parser.py", "completed", kind="read"),),
+        timeline=(
+            Narration("Reading it."),
+            Activity("ls"),
+            TurnNote("steer", "Use the **new** tokenizer, not the old one."),
+            Narration("\n\nSwitching."),
+        ),
+    )
+    state = replace(populated_state(), turns=(turn,))
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+
+    assert "you · mid-run" in rendered
+    assert "▎" in rendered
+    steer = rendered.index("Use the new tokenizer")
+    assert rendered.index("read parser.py") < steer < rendered.index("Switching.")
