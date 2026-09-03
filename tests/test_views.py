@@ -414,8 +414,8 @@ def test_the_working_tool_row_carries_a_shine_that_moves_with_the_clock() -> Non
     later = shimmer("read src/app.py", 0.5)
 
     assert early.plain == later.plain == "read src/app.py"
-    lit_early = {span.start for span in early.spans if "white" in str(span.style)}
-    lit_later = {span.start for span in later.spans if "white" in str(span.style)}
+    lit_early = {span.start for span in early.spans if ACCENT in str(span.style)}
+    lit_later = {span.start for span in later.spans if ACCENT in str(span.style)}
     assert lit_early and lit_later and lit_early != lit_later
 
 
@@ -439,7 +439,7 @@ def test_the_latest_group_of_a_working_turn_shines_between_calls() -> None:
         return any(
             segment.style is not None
             and segment.style.color is not None
-            and segment.style.color.name == "white"
+            and segment.style.color == Color.parse(ACCENT)
             for segment in console.render(renderable)
         )
 

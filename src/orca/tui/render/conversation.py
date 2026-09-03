@@ -105,6 +105,8 @@ _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 #: How far the shine on a working tool row moves per second, in cells, and how wide it is.
 _SHINE_SPEED = 24.0
 _SHINE_WIDTH = 7
+#: The band's edges, between the accent at its centre and the plain bold text around it.
+SHINE_EDGE = "#a9c7dc"
 
 
 def shimmer(text: str, clock: float) -> Text:
@@ -114,9 +116,10 @@ def shimmer(text: str, clock: float) -> Text:
     the same words, muted, with a few brighter cells that move left to right and wrap. Pure
     in the clock, so a still frame is a still frame and a test can pin one.
     """
-    # Bold throughout: a lit row is the one being watched, and reads that way even in a
-    # frame where the band is off the text. The band brightens it further as it passes.
-    line = Text(text, style=f"bold {MUTED}")
+    # Bold, in the ordinary text colour rather than the muted one the finished rows use:
+    # a lit row is the one being watched, and bold on a dim grey reads as the same weight
+    # in most terminals. The band passes over it in the accent colour.
+    line = Text(text, style="bold")
     if not text:
         return line
     span = len(text) + _SHINE_WIDTH
@@ -126,7 +129,7 @@ def shimmer(text: str, clock: float) -> Text:
         if 0 <= cell < len(text):
             # Brightest at the centre of the band, accent at its edges.
             centre = abs(offset - _SHINE_WIDTH // 2)
-            line.stylize("bold white" if centre <= 1 else f"bold {ACCENT}", cell, cell + 1)
+            line.stylize(f"bold {ACCENT}" if centre <= 1 else f"bold {SHINE_EDGE}", cell, cell + 1)
     return line
 
 
