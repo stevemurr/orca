@@ -55,7 +55,9 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 continue
             if pending:
                 # Consecutive rows share one table so their glyphs line up.
-                rows.append(Padding(_activity_table(pending), (0, 1)))
+                # A blank line either side: rows sit between paragraphs of the model's
+                # own words, and against them they read as part of the sentence.
+                rows.append(Padding(_activity_table(pending), (1, 1)))
                 pending = []
             if isinstance(segment, Narration):
                 if not narrated:
