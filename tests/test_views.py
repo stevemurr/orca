@@ -56,7 +56,6 @@ def test_header_stays_quiet_and_names_exact_context() -> None:
     rendered = plain(render_header(populated_state(), width=100), width=100)
 
     assert "orca" in rendered
-    assert "~/Code/orca" in rendered
     assert "running" in rendered
 
 
@@ -274,12 +273,13 @@ def test_the_active_turn_shows_a_spinner_and_how_long_it_has_run() -> None:
     assert "≈12.3k / 262.1k tokens (4%)" in footer
 
 
-def test_header_names_the_folders_a_conversation_reaches_beyond_the_workspace() -> None:
+def test_the_footer_names_the_folder_and_what_the_conversation_reaches_beyond_it() -> None:
     state = replace(populated_state(), folders=("/Users/murr/Code/orca", "/srv/lib"))
 
-    rendered = plain(render_header(state, width=100), width=100)
+    rendered = plain(render_footer(state), width=100)
 
-    assert "~/Code/orca  + orca, lib" in rendered
+    assert "~/Code/orca  + orca, lib  ·  auto · safe" in rendered
+    assert "~/Code/orca" not in plain(render_header(state, width=100), width=100)
 
 
 def test_the_transcript_shows_a_tool_call_where_it_happened() -> None:

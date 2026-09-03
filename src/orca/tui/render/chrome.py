@@ -29,14 +29,6 @@ def render_header(state: AppState, *, width: int) -> RenderableType:
     left = Text()
     left.append("›_ ", style=f"bold {ACCENT}")
     left.append("orca", style="bold")
-    if state.workspace_path:
-        left.append("  ")
-        left.append(state.workspace_path, style=MUTED)
-    if state.folders:
-        # The folders the conversation reaches beyond the workspace, by name: a path each
-        # would take the whole line, and the full paths are one `/add` away.
-        names = ", ".join(_folder_name(folder) for folder in state.folders)
-        left.append(f"  + {names}", style=MUTED)
     status = "connecting" if state.booting else state.run_status.value.replace("_", " ")
     right = Text()
     right.append("● " if state.connected else "○ ", style=SUCCESS if state.connected else MUTED)
@@ -141,8 +133,17 @@ def render_footer(state: AppState) -> Text:
         "review": "esc back · /chat conversation",
         "inspector": "developer view · esc back",
     }[state.view.value]
-    if state.usage is not None and state.view.value == "conversation":
-        left += f" · {_usage_label(state.usage)}"
+    if state.view.value == "conversation":
+        # The folder the run works in, where an editor's agent shows it: under the input,
+        # beside the settings for the next turn. The folders the conversation reaches
+        # beyond it by name -- a path each would take the line, and `/add` lists them.
+        place = state.workspace_path
+        if state.folders:
+            place += "  + " + ", ".join(_folder_name(folder) for folder in state.folders)
+        if place:
+            left = f"{place}  ·  {left}"
+        if state.usage is not None:
+            left += f" · {_usage_label(state.usage)}"
     right = "ctrl+p commands"
     width = max(1, state.viewport_width - 2)
     if width < len(right) + 6:
