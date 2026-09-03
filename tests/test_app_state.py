@@ -6,16 +6,20 @@ from dataclasses import replace
 
 from orca.app.actions import (
     Back,
+    CommandInvoked,
+    ComposerSubmitted,
     Connected,
     EventReceived,
+    FolderAdded,
     Navigate,
     RunAccepted,
     ThreadLoaded,
     ThreadSelected,
 )
 from orca.app.commands import ParsedCommand, parse_input
-from orca.app.model import AppState, RunStatus, TaskEvent, ThreadReplay, ViewId
-from orca.app.update import FollowRun, LoadThread, reduce
+from orca.app.model import AppState, RunStatus, TaskEvent, ThreadReplay, TurnNote, ViewId
+from orca.app.update import AddFolder, FollowRun, LoadThread, SendRunCommand, reduce
+from orca.backend import Answer
 from orca.json_types import JsonObject
 
 
@@ -54,7 +58,6 @@ def test_boot_preserves_an_explicit_thread_but_workspace_switch_resets_context()
         workspace_id="ws-2",
         workspace_name="other",
         workspace_path="/other",
-        cwd_relative=".",
     )
     initial = AppState(thread_id="thread-explicit")
 
@@ -311,3 +314,69 @@ def test_a_resumed_run_stops_reading_as_paused() -> None:
     resumed = feed(state, event(3, "run.resumed", {}))
 
     assert resumed.run_status is RunStatus.RUNNING
+
+
+def _running() -> AppState:
+    state = reduce(AppState(), RunAccepted("run-1", "thread-1")).state
+    return feed(state, event(1, "run.created", {"message": "Do it"}))
+
+
+def test_compaction_steer_and_folder_are_notes_on_the_turn() -> None:
+    """Three things the backend says that are neither activity nor answer. They used to be
+    dropped as unknown kinds, so a person saw a run change course with no explanation."""
+    state = feed(
+        _running(),
+        event(2, "context.compacted", {"summary": "handoff", "chars_before": 9, "chars_after": 1}),
+        event(3, "run.steered", {"content": "use the other parser"}),
+        event(4, "folder.added", {"path": "/srv/lib"}),
+        event(5, "folder.added", {"path": "/srv/lib"}),
+    )
+
+    assert state.folders == ("/srv/lib",)
+    assert [note.kind for note in state.turns[-1].notes] == ["compaction", "steer", "folder"]
+    assert state.turns[-1].notes[1] == TurnNote("steer", "use the other parser")
+
+
+def test_a_question_carries_its_options_and_a_number_picks_one() -> None:
+    state = feed(
+        _running(),
+        event(
+            2,
+            "question.requested",
+            {"question_id": "q1", "prompt": "Which?", "options": ["sqlite", "postgres"]},
+        ),
+    )
+    assert state.interaction is not None
+    assert state.interaction.options == ("sqlite", "postgres")
+
+    picked = reduce(state, ComposerSubmitted("2"))
+    typed = reduce(state, ComposerSubmitted("neither"))
+    declined = reduce(state, ComposerSubmitted(""))
+
+    assert picked.effects == (SendRunCommand("run-1", Answer("q1", "postgres")),)
+    assert typed.effects == (SendRunCommand("run-1", Answer("q1", "neither")),)
+    # The backend treats an empty answer as "I am not answering", which is a real reply.
+    assert declined.effects == (SendRunCommand("run-1", Answer("q1", "")),)
+    assert reduce(_running(), ComposerSubmitted("")).effects == ()
+
+
+def test_add_asks_the_backend_and_keeps_the_thread_it_made() -> None:
+    fresh = AppState(connected=True, booting=False)
+
+    asked = reduce(fresh, CommandInvoked("add", "/srv/lib"))
+    assert asked.effects == (AddFolder(None, "/srv/lib"),)
+
+    widened = reduce(asked.state, FolderAdded("thread-9", ("/srv/app", "/srv/lib"))).state
+    assert widened.thread_id == "thread-9"
+    assert widened.folders == ("/srv/app", "/srv/lib")
+    assert widened.notices[-1].message == "folder added: /srv/app, /srv/lib"
+
+    listed = reduce(widened, CommandInvoked("add", "")).state
+    assert listed.notices[-1].message == "folders: /srv/app, /srv/lib"
+
+    # Widening is allowed while a run is going; the backend tells the agent through its inbox.
+    assert reduce(_running(), CommandInvoked("add", "/srv/lib")).effects == (
+        AddFolder("thread-1", "/srv/lib"),
+    )
+    # A new conversation reaches the workspace only.
+    assert reduce(widened, CommandInvoked("new", "")).state.folders == ()

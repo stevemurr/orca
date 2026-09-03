@@ -79,7 +79,7 @@ def _init_repo(root: Path, content: str) -> str:
     return git(root, "rev-list", "--max-parents=0", "HEAD")
 
 
-def test_discovery_uses_the_nearest_git_checkout_and_preserves_focus(
+def test_discovery_uses_the_nearest_git_checkout_from_a_subfolder(
     tmp_path: Path,
 ) -> None:
     outer = tmp_path / "outer"
@@ -92,8 +92,6 @@ def test_discovery_uses_the_nearest_git_checkout_and_preserves_focus(
     found = discover_local_workspace(focus)
 
     assert found.root == nested.resolve()
-    assert found.active_directory == focus.resolve()
-    assert found.cwd_relative == "packages/web"
     assert found.vcs == "git"
 
 
@@ -103,12 +101,7 @@ def test_discovery_uses_an_ordinary_folder_as_its_exact_root(tmp_path: Path) -> 
 
     found = discover_local_workspace(folder)
 
-    assert found == LocalWorkspace(
-        root=folder.resolve(),
-        active_directory=folder.resolve(),
-        cwd_relative=".",
-        vcs="none",
-    )
+    assert found == LocalWorkspace(root=folder.resolve(), vcs="none")
 
 
 def test_discovery_does_not_treat_a_bare_repository_as_an_ordinary_folder(
@@ -181,7 +174,6 @@ def test_resolver_registers_the_exact_discovered_root_instead_of_using_an_ancest
 
     assert binding.workspace_id == "ws_nested"
     assert binding.root == nested.resolve()
-    assert binding.active_directory == nested.resolve()
 
 
 def test_resolver_replaces_a_plain_registration_after_the_folder_becomes_git(

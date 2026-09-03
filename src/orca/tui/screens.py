@@ -43,7 +43,7 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
 
     def __init__(self, rows: tuple[ThreadSummary, ...]) -> None:
         super().__init__()
-        self._rows: tuple[ThreadSummary, ...] = rows
+        self._rows: tuple[ThreadSummary, ...] = nested_threads(rows)
         self._choices: dict[str, tuple[str, str]] = {
             row.thread_id: (row.thread_id, row.title) for row in rows
         }
@@ -134,13 +134,34 @@ class ApprovalScreen(ModalScreen[None]):
         return render_interaction(self._state, width=width)
 
 
+def nested_threads(rows: tuple[ThreadSummary, ...]) -> tuple[ThreadSummary, ...]:
+    """Each delegated thread directly under the thread that delegated it.
+
+    The listing arrives flat, newest first. A child whose parent is not listed stays where
+    it was, still marked as a child, rather than vanishing.
+    """
+    listed = {row.thread_id for row in rows}
+    ordered: list[ThreadSummary] = []
+    for row in rows:
+        if row.parent and row.parent in listed:
+            continue
+        ordered.append(row)
+        ordered.extend(child for child in rows if child.parent == row.thread_id)
+    return tuple(ordered)
+
+
 def _thread_prompt(row: ThreadSummary) -> Text:
     title = row.title or "Untitled conversation"
     status = (row.latest_run_status or "idle").replace("_", " ")
     updated = _display_timestamp(row.updated_at)
-    detail = status if not updated else f"{status}  ·  {updated}"
-    prompt = Text(title, style="bold")
-    prompt.append(f"\n{detail}", style="dim")
+    parts = [status]
+    if updated:
+        parts.append(updated)
+    if row.folder:
+        parts.append(row.folder)
+    prompt = Text("↳ " if row.parent else "", style="dim")
+    prompt.append(title, style="bold")
+    prompt.append("\n" + "  ·  ".join(parts), style="dim")
     return prompt
 
 

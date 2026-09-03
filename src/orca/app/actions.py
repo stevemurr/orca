@@ -16,7 +16,6 @@ class Connected:
     workspace_id: str
     workspace_name: str
     workspace_path: str
-    cwd_relative: str
     reset_conversation: bool = False
 
 
@@ -97,6 +96,14 @@ class QuestionAnswered:
 
 
 @dataclass(frozen=True, slots=True)
+class FolderAdded:
+    """The backend widened the conversation. `thread_id` may be new: see `add_folder`."""
+
+    thread_id: str
+    folders: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CommandCompleted:
     command: str
     outcome: CommandOutcome
@@ -118,5 +125,6 @@ Action = (
     | ThreadLoaded
     | ApprovalDecided
     | QuestionAnswered
+    | FolderAdded
     | CommandCompleted
 )

@@ -9,7 +9,7 @@ converse also holds — if orca cannot do something without knowing how your har
 that is a gap here rather than a reason to reach past it.
 
 Speaking HTTP is optional. `orca.backend.TerminalBackend` is the actual boundary, and a Python
-harness implements those eight methods directly. This document exists because most harnesses
+harness implements those nine methods directly. This document exists because most harnesses
 already have a server.
 
 ---
@@ -61,6 +61,11 @@ set when it started the process, and be empty otherwise. It is an ownership mark
 authority: orca will not signal a process that cannot prove it is the one orca started. A backend
 that is never process-managed does not need this route.
 
+A process orca starts is also told the credential, when the profile has one, as `HARNESS_TOKEN`,
+and is expected to require it as the bearer token on every route. Every other `ORCA_*` variable
+in orca's own environment is forwarded as it is, so a backend reads its configuration from
+variables an operator exported under that prefix.
+
 ---
 
 ## Workspaces
@@ -103,8 +108,11 @@ message, which is a reasonable default and not a decision the backend has to res
 
 ### `GET /threads?workspace_id=&limit=`
 
-`{"threads": [{"thread_id", "title", "latest_run_status", "updated_at"}, …]}`, most recent first.
-Only `thread_id` is required; the rest sharpen the picker.
+`{"threads": [{"thread_id", "title", "latest_run_status", "updated_at", "parent", "folder",
+"root_path"}, …]}`, most recent first. Only `thread_id` is required; the rest sharpen the picker.
+`parent` is the thread that delegated this one, and orca nests a child under its parent rather
+than listing it as a question nobody asked. `folder` is the working folder's name and `root_path`
+its path.
 
 ### `GET /threads/{thread_id}` → `{"thread_id", "workspace_id", "title"}`
 
@@ -117,24 +125,45 @@ orca refuses to continue a thread whose `workspace_id` is not the bound one.
   "workspace_id": "ws_01J…",
   "message": {"content": "Add retry handling to the websocket client."},
   "mode": "auto",
-  "approval_policy": "safe",
-  "client_context": {"cwd_relative": "Sources/App"}
+  "approval_policy": "safe"
 }
 ```
 
 Return **202** immediately with `{"run_id", "thread_id"}`. Never hold the connection for the work.
 
 `mode` and `approval_policy` are your vocabularies, not orca's. It passes through whatever `/mode`
-and `/permissions` were set to and defaults to `auto` and `safe`. `client_context.cwd_relative` is
-where inside the folder the person is standing — relative, no `..` — and is advisory.
+and `/permissions` were set to and defaults to `auto` and `safe`.
 
-`workspace_id` is omitted rather than sent as null when there is none, which is how orca works in
-a directory that is not a registered project.
+The run works in the workspace's folder and nowhere else. orca used to send a `client_context`
+naming the subfolder the person launched from; no backend honoured it, and showing that subfolder
+in the header named a folder the run never worked in, so both went (2026-09-03). A run that needs
+to reach more than one folder is widened, below.
+
+### `POST /threads/{thread_id}/folders`
+
+```json
+{"path": "/Users/me/code/shared-lib"}
+```
+
+Let the conversation reach one more folder, now and on every later run: **`{"folders": [...]}`**,
+absolute, the working folder first. The working folder does not change — relative paths still
+resolve against it and commands still run in it — and the added folder is reachable by absolute
+path. A path that is not a directory is a `400` with a sentence. With a run in flight, tell the
+agent and publish `folder.added`; between runs, record it so the next run reaches it.
+
+orca sends this for `/add <path>`. A person may widen before the first message, so orca creates
+the thread first when there is none and keeps using the id it was given.
 
 ### `GET /runs?thread_id=&limit=`
 
 `{"runs": [{"run_id", "status"}, …]}`, newest first. orca reverses it to replay a thread oldest
 first, and reads `status` to know whether a replayed run is still going.
+
+This is how a conversation is resumed, so it has to answer after a restart. The harness keeps the
+transcript as the durable record and rebuilds a thread's finished runs from it when the thread is
+opened — the same run ids, and the same events a client would have seen live, derived rather than
+stored twice. Live states do not replay: a reopened thread never shows a stale approval, question
+or pause, and a run whose transcript ends without an answer replays as `failed`.
 
 `status` is `queued`, `running`, `awaiting_approval`, `awaiting_input`, `paused`, `blocked`,
 `completed`, `failed` or `cancelled`. The last four are terminal. A value orca does not recognise
@@ -219,9 +248,12 @@ which is the one failure this rule exists to prevent.
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
 | `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments.argv`, `allowed_decisions` | Modal, and the run parks. `title` is what a person judges; `arguments.argv` is shown as a shell-quoted command line. |
-| `approval.resolved` | — | Dismisses it. |
-| `question.requested` | `question_id`, `prompt` | Inline above the composer; the next thing typed is the answer. |
+| `approval.resolved` | — | Dismisses it. A run paused under the modal stays paused: send `run.paused` again after this, since orca reads a resolution as running. |
+| `question.requested` | `question_id`, `prompt`, `options[]` | Inline above the composer; the next thing typed is the answer. `options` are the agent's guesses, shown numbered — a number picks one, anything else is sent as typed, and an empty answer is sent as "I am not answering". |
 | `question.resolved` | — | Dismisses it. |
+| `context.compacted` | `summary` | A note on the turn: the agent now works from a summary. User-visible on purpose; it is the honest explanation for a change in behaviour. |
+| `run.steered` | `content` | A note on the turn with the instruction the person sent. |
+| `folder.added` | `path` | A note on the turn, and the folder joins the header. Absolute. |
 | `run.paused` | — | Not terminal. |
 | `run.resumed` | — | Not terminal. Undoes `run.paused`; without it a paused run reads as paused until it ends. |
 | `run.completed` / `.failed` / `.cancelled` / `.blocked` | `summary` | Terminal. Exactly one, nothing after it. `summary` replaces the streamed answer. |

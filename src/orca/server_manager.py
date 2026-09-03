@@ -56,6 +56,12 @@ SERVER_COMMAND_ENV = "ORCA_SERVER_COMMAND"
 #: not signal a process, because it cannot prove the process at that port is the one it started.
 INSTANCE_ID_ENV = "ORCA_MANAGED_INSTANCE_ID"
 
+#: How the credential reaches a server orca starts. The harness reads `HARNESS_TOKEN` (or a
+#: `--token` flag, which would put the secret in the process table), and nothing else; until
+#: 2026-09-03 orca forwarded it under its own client name, which the harness never read, so a
+#: profile with a credential started a server that required none.
+MANAGED_TOKEN_ENV = "HARNESS_TOKEN"
+
 _START_TIMEOUT_S = 15.0
 _STOP_TIMEOUT_S = 15.0
 _POLL_S = 0.1
@@ -120,6 +126,29 @@ def server_command(environ: Mapping[str, str] | None = None) -> list[str] | None
     except ValueError:
         return None
     return argv or None
+
+
+def child_environment(
+    connection: Connection,
+    instance_id: str,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """What a server orca starts is told, on top of the constructed base environment.
+
+    `ORCA_*` is the whole forwarding rule: the child gets a constructed environment, so a
+    backend reads its own configuration from variables an operator deliberately exported
+    under that prefix. The client-only keys are removed because they describe how *this
+    process* found the server, not how the server should run. The credential goes out under
+    the name the harness reads, and the instance id under the name it echoes.
+    """
+    source = os.environ if environ is None else environ
+    forwarded = {key: value for key, value in source.items() if key.startswith("ORCA_")}
+    for client_key in (CONFIG_HOME_ENV, PROFILE_ENV, URL_ENV, TOKEN_ENV, TOKEN_FILE_ENV):
+        forwarded.pop(client_key, None)
+    if connection.token:
+        forwarded[MANAGED_TOKEN_ENV] = connection.token
+    forwarded[INSTANCE_ID_ENV] = instance_id
+    return forwarded
 
 
 def _launch_argv(argv: list[str], *, host: str, port: int) -> list[str]:
@@ -365,25 +394,12 @@ class LocalServerManager:
                     f"set {SERVER_COMMAND_ENV} to the command that starts your backend before "
                     + "asking orca to manage it"
                 )
-            # `ORCA_*` is the whole forwarding rule: the child gets a constructed environment,
-            # so a backend reads its own configuration from variables an operator deliberately
-            # exported under that prefix. The four client-only keys are removed because they
-            # describe how *this process* found the server, not how the server should run.
-            forwarded = {key: value for key, value in os.environ.items() if key.startswith("ORCA_")}
-            for client_key in (CONFIG_HOME_ENV, PROFILE_ENV, URL_ENV, TOKEN_FILE_ENV):
-                forwarded.pop(client_key, None)
-            if self.connection.token:
-                forwarded[TOKEN_ENV] = self.connection.token
-            else:
-                forwarded.pop(TOKEN_ENV, None)
-            forwarded[INSTANCE_ID_ENV] = instance_id
-
             process = await asyncio.to_thread(
                 start_detached,
                 _launch_argv(argv, host=host, port=port),
                 cwd=self.runtime,
                 output_path=self.log_path,
-                env_overrides=forwarded,
+                env_overrides=child_environment(self.connection, instance_id),
             )
             receipt = _Receipt(
                 endpoint=self.connection.endpoint,

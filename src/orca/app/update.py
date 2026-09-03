@@ -18,6 +18,7 @@ from orca.app.actions import (
     Connected,
     ConnectFailed,
     EventReceived,
+    FolderAdded,
     Navigate,
     OperationFailed,
     QuestionAnswered,
@@ -37,6 +38,8 @@ from orca.app.model import (
     ProgressItem,
     RunStatus,
     TaskEvent,
+    TurnNote,
+    TurnNoteKind,
     TurnState,
     ViewId,
 )
@@ -86,6 +89,15 @@ class FollowRun:
 
 
 @dataclass(frozen=True, slots=True)
+class AddFolder:
+    """Widen the conversation to one more folder. `thread_id` is None before the first
+    message; the backend then makes the thread and `FolderAdded` carries its id back."""
+
+    thread_id: str | None
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
 class SwitchWorkspace:
     selector: str
 
@@ -103,6 +115,7 @@ Effect = (
     | LoadThread
     | FollowRun
     | SwitchWorkspace
+    | AddFolder
     | ExitApplication
 )
 
@@ -128,6 +141,7 @@ def reduce(state: AppState, action: Action) -> Transition:
                 "view_stack": (ViewId.CONVERSATION,),
                 "developer_cursor": 0,
                 "developer_events": (),
+                "folders": (),
             }
             if action.reset_conversation
             else {}
@@ -143,7 +157,6 @@ def reduce(state: AppState, action: Action) -> Transition:
                 workspace_id=action.workspace_id,
                 workspace_name=action.workspace_name,
                 workspace_path=action.workspace_path,
-                cwd_relative=action.cwd_relative,
                 **conversation,
             )
         )
@@ -182,14 +195,21 @@ def reduce(state: AppState, action: Action) -> Transition:
         return Transition(replace(state, composer_draft=action.text))
     if isinstance(action, ComposerSubmitted):
         text = action.text.strip()
-        if not text:
+        asked = (
+            state.interaction
+            if state.interaction and state.interaction.kind == "question"
+            else None
+        )
+        if not text and asked is None:
             return Transition(state)
         parsed = parse_input(text)
         cleared = replace(state, composer_draft="")
         if parsed is not None:
             return reduce(cleared, CommandInvoked(parsed.name, parsed.argument))
-        if state.interaction is not None and state.interaction.kind == "question":
-            return reduce(cleared, QuestionAnswered(text))
+        if asked is not None:
+            # A number picks one of the offered options; anything else, including nothing,
+            # is the answer as typed. The backend treats an empty answer as a real reply.
+            return reduce(cleared, QuestionAnswered(_chosen_option(asked.options, text)))
         if state.active_run_id:
             return Transition(
                 cleared,
@@ -236,6 +256,7 @@ def reduce(state: AppState, action: Action) -> Transition:
             submitting=False,
             developer_cursor=0,
             developer_events=(),
+            folders=(),
         )
         for run in action.runs:
             replayed = reduce(
@@ -302,6 +323,15 @@ def reduce(state: AppState, action: Action) -> Transition:
                 ),
             ),
         )
+    if isinstance(action, FolderAdded):
+        added = [folder for folder in action.folders if folder not in state.folders]
+        label = ", ".join(added) if added else "no change"
+        return Transition(
+            _notice(
+                replace(state, thread_id=action.thread_id, folders=action.folders),
+                f"folder added: {label}",
+            )
+        )
     match action:
         case CommandCompleted():
             return Transition(
@@ -351,8 +381,16 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
                 view_stack=(ViewId.CONVERSATION,),
                 developer_cursor=0,
                 developer_events=(),
+                folders=(),
             )
         )
+    if name == "add":
+        if not argument:
+            reach = ", ".join(state.folders) if state.folders else "the workspace only"
+            return Transition(_notice(state, f"folders: {reach}"))
+        # Allowed while a run is going: the backend tells the agent through its inbox and the
+        # stream says so. Only the thread is needed, and the backend makes one if there is none.
+        return Transition(state, (AddFolder(state.thread_id, argument),))
     if name == "mode":
         if not argument:
             return Transition(_notice(state, f"mode: {state.mode}"))
@@ -505,10 +543,14 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
 
     if kind == "question.requested":
+        offered = payload.get("options")
         interaction = InteractionState(
             kind="question",
             request_id=_string(payload, "question_id") or event.event_id,
             title=_string(payload, "prompt") or "The agent needs more information.",
+            options=tuple(str(item) for item in offered if str(item).strip())
+            if isinstance(offered, list)
+            else (),
         )
         return Transition(
             replace(state, interaction=interaction, run_status=RunStatus.AWAITING_INPUT)
@@ -516,6 +558,24 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
 
     if kind in {"approval.resolved", "question.resolved"}:
         return Transition(replace(state, interaction=None, run_status=RunStatus.RUNNING))
+
+    if kind == "context.compacted":
+        # A `user` row on purpose: the agent now works from a summary, which is the honest
+        # explanation for any change in how it behaves next.
+        return Transition(
+            _note(state, "compaction", "Context compacted; the agent continues from a summary.")
+        )
+
+    if kind == "run.steered":
+        return Transition(_note(state, "steer", _string(payload, "content").strip()))
+
+    if kind == "folder.added":
+        path = _string(payload, "path").strip()
+        if not path or path in state.folders:
+            # Already reached: the widening was answered on the command, or replayed.
+            return Transition(state)
+        folders = (*state.folders, path)
+        return Transition(_note(replace(state, folders=folders), "folder", f"Added folder {path}"))
 
     if kind == "run.paused":
         return Transition(replace(state, run_status=RunStatus.PAUSED))
@@ -589,6 +649,21 @@ def _reported_run_status(value: str) -> RunStatus | None:
         return RunStatus(value.strip().lower())
     except ValueError:
         return None
+
+
+def _note(state: AppState, kind: TurnNoteKind, text: str) -> AppState:
+    """Attach a note to the latest turn, or leave the state alone when there is nothing to say."""
+    if not text:
+        return state
+    turn = _latest_turn(state)
+    return _replace_latest_turn(state, replace(turn, notes=(*turn.notes, TurnNote(kind, text))))
+
+
+def _chosen_option(options: tuple[str, ...], text: str) -> str:
+    """`2` means the second offered option; anything else is the answer as typed."""
+    if text.isdigit() and 1 <= int(text) <= len(options):
+        return options[int(text) - 1]
+    return text
 
 
 def _notice(state: AppState, message: str, level: NoticeLevel = "info") -> AppState:

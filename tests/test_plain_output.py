@@ -56,7 +56,7 @@ async def test_plain_run_prints_progress_then_canonical_answer() -> None:
     output = StringIO()
     code = await run_once(
         PlainBackend(),
-        RunRequest("Build it", None, "", ".", "auto", "safe"),
+        RunRequest("Build it", None, "", "auto", "safe"),
         stdout=output,
     )
 
@@ -68,7 +68,7 @@ async def test_jsonl_is_versioned_and_keeps_wire_facts_structured() -> None:
     output = StringIO()
     await run_once(
         PlainBackend(),
-        RunRequest("Build it", None, "", ".", "auto", "safe"),
+        RunRequest("Build it", None, "", "auto", "safe"),
         stdout=output,
         jsonl=True,
     )
@@ -91,7 +91,7 @@ async def test_no_follow_prints_only_copyable_run_identity() -> None:
     output = StringIO()
     await run_once(
         PlainBackend(),
-        RunRequest("Build it", None, "", ".", "auto", "safe"),
+        RunRequest("Build it", None, "", "auto", "safe"),
         stdout=output,
         follow=False,
     )
@@ -104,7 +104,7 @@ async def test_plain_run_detaches_with_distinct_exit_when_input_is_required() ->
 
     code = await run_once(
         ApprovalBackend(),
-        RunRequest("Release it", None, "", ".", "auto", "safe"),
+        RunRequest("Release it", None, "", "auto", "safe"),
         stdout=output,
     )
 
@@ -149,7 +149,7 @@ async def test_plain_run_announces_a_step_when_it_starts_and_only_then() -> None
     output = StringIO()
     code = await run_once(
         PlanBackend(),
-        RunRequest("Add the endpoint", None, "", ".", "auto", "safe"),
+        RunRequest("Add the endpoint", None, "", "auto", "safe"),
         stdout=output,
     )
 

@@ -85,6 +85,18 @@ class ArtifactOffer:
     reference: str = ""
 
 
+#: Something that happened to a turn that is neither activity nor answer: the context was
+#: handed off to a summary, the person steered the run, a folder was added. Orca's own
+#: vocabulary, so it is closed.
+TurnNoteKind = Literal["compaction", "steer", "folder"]
+
+
+@dataclass(frozen=True, slots=True)
+class TurnNote:
+    kind: TurnNoteKind
+    text: str
+
+
 @dataclass(frozen=True, slots=True)
 class TurnState:
     run_id: str
@@ -100,6 +112,8 @@ class TurnState:
     #: Replaced wholesale by each `plan.progress`, because that is what the event carries.
     plan: tuple[PlanStep, ...] = ()
     plan_explanation: str = ""
+    #: In the order they arrived, after the activity rows they interleaved with.
+    notes: tuple[TurnNote, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +125,9 @@ class InteractionState:
     command: str = ""
     risk: str = ""
     allowed_decisions: tuple[str, ...] = ()
+    #: For a question: the agent's guesses at the answer. Hints, not a closed set -- a
+    #: person may pick one by number or type something else.
+    options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +149,9 @@ class AppState:
     workspace_id: str = ""
     workspace_name: str = ""
     workspace_path: str = ""
-    cwd_relative: str = "."
+    #: Folders this conversation reaches beyond the workspace, absolute, as the backend
+    #: reports them. Per thread: reset with the conversation.
+    folders: tuple[str, ...] = ()
     thread_id: str | None = None
     active_run_id: str | None = None
     cursor: int = 0

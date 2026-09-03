@@ -2,7 +2,7 @@
 
 This is orca's whole contract with the thing doing the work. Everything above it — the reducer,
 the renderers, the Textual host, the plain and JSONL output modes — is written against these
-eight methods and nothing else, so a harness that satisfies them gets the entire terminal
+nine methods and nothing else, so a harness that satisfies them gets the entire terminal
 client and orca learns nothing about how the harness is built.
 
 `orca.http_backend.HttpBackend` is one implementation, speaking the HTTP wire contract in
@@ -61,11 +61,10 @@ class SessionInfo:
     #: Human-readable name for that folder.
     workspace_name: str
     #: Display path for that folder — `~`-relative is friendlier than absolute. Shown in the
-    #: header, and it must name the folder the run will actually touch. A prettier path than
-    #: the real one is the client's most dangerous possible lie.
+    #: header, and it must name the folder the run will actually work in. A prettier path than
+    #: the real one is the client's most dangerous possible lie -- and so is a subfolder: the
+    #: backend runs in the registered folder, so that is the folder shown. (2026-09-03)
     workspace_path: str
-    #: Where inside the folder the person is standing, relative and without `..`.
-    cwd_relative: str = "."
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +80,6 @@ class RunRequest:
     #: Continue this conversation, or None to let the backend start one.
     thread_id: str | None
     workspace_id: str
-    cwd_relative: str
     #: How much effort to spend. A backend-defined string orca passes through unread; the
     #: person sets it with `/mode` and it defaults to `auto`.
     mode: str
@@ -130,6 +128,26 @@ class ThreadSummary:
     latest_run_status: str = ""
     #: ISO-8601 if you have it. Anything unparseable is simply not shown.
     updated_at: str = ""
+    #: The thread that delegated this one, or empty. A picker nests a child under its parent
+    #: rather than listing it as a question nobody asked.
+    parent: str = ""
+    #: The folder the thread works in, as a name and as a path, so a listing can say which
+    #: project a conversation belongs to.
+    folder: str = ""
+    root_path: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadFolders:
+    """What `add_folder` returns: the thread it widened, and every folder it now reaches.
+
+    `thread_id` is returned because a person may widen before the first message, when no
+    thread exists yet; the backend makes one and orca has to keep using it.
+    """
+
+    thread_id: str
+    #: Absolute paths, the working folder first.
+    folders: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +278,16 @@ class TerminalBackend(Protocol):
         `selector` is whatever followed `/workspace` — a path, a name, an id. Resolve it or
         raise `BackendError`; orca never guesses on the backend's behalf. Only called while no
         run is active, and the returned `SessionInfo` resets the conversation.
+        """
+        ...
+
+    async def add_folder(self, thread_id: str | None, path: str) -> ThreadFolders:
+        """Let this conversation reach one more folder, now and on every later run.
+
+        The working folder does not change: relative paths still resolve against it and
+        commands still run in it. The added folder is reachable by absolute path. With no
+        thread yet, make one and return its id. Raise `BackendError` for a path that is not
+        a directory, with the backend's own words.
         """
         ...
 

@@ -31,6 +31,11 @@ def render_header(state: AppState, *, width: int) -> RenderableType:
     if state.workspace_path:
         left.append("  ")
         left.append(state.workspace_path, style=MUTED)
+    if state.folders:
+        # The folders the conversation reaches beyond the workspace, by name: a path each
+        # would take the whole line, and the full paths are one `/add` away.
+        names = ", ".join(_folder_name(folder) for folder in state.folders)
+        left.append(f"  + {names}", style=MUTED)
     status = "connecting" if state.booting else state.run_status.value.replace("_", " ")
     right = Text()
     right.append("● " if state.connected else "○ ", style=SUCCESS if state.connected else MUTED)
@@ -64,6 +69,9 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
         rows.append(Text(interaction.summary, style=MUTED))
     if interaction.command:
         rows.append(Text(f"$ {interaction.command}", style=WARNING, overflow="fold"))
+    if interaction.options:
+        for index, option in enumerate(interaction.options, start=1):
+            rows.append(Text.assemble((f"{index}", f"bold {ACCENT}"), (f" {option}", MUTED)))
     if interaction.kind == "approval":
         choices = Text()
         choices.append("1", style=f"bold {ACCENT}")
@@ -74,6 +82,8 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
         choices.append("3", style=f"bold {ACCENT}")
         choices.append(" reject", style=MUTED)
         rows.append(choices)
+    elif interaction.options:
+        rows.append(Text("Type a number or your own answer below and press Enter.", style=MUTED))
     else:
         rows.append(Text("Type your answer below and press Enter.", style=MUTED))
     return Panel(
@@ -126,6 +136,10 @@ def render_help(*, developer: bool = False) -> RenderableType:
     keys.add_row("Esc", "return from a view; pause from chat")
     keys.add_row("Ctrl+P", "command palette")
     return Group(Text("Commands", style="bold"), table, Text(""), Text("Keys", style="bold"), keys)
+
+
+def _folder_name(path: str) -> str:
+    return path.rstrip("/").rsplit("/", 1)[-1] or path
 
 
 def _run_style(status: RunStatus) -> str:

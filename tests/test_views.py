@@ -241,3 +241,11 @@ def test_a_status_this_client_has_never_heard_of_still_shows_its_step() -> None:
     rendered = plain(render_conversation(replace(state, turns=(turn,)), width=90), width=90)
 
     assert "○  something new" in rendered
+
+
+def test_header_names_the_folders_a_conversation_reaches_beyond_the_workspace() -> None:
+    state = replace(populated_state(), folders=("/Users/murr/Code/orca", "/srv/lib"))
+
+    rendered = plain(render_header(state, width=100), width=100)
+
+    assert "~/Code/orca  + orca, lib" in rendered

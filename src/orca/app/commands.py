@@ -30,6 +30,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("mode", "set the mode for future turns", "<mode>"),
     CommandSpec("permissions", "set the approval policy", "<policy>"),
     CommandSpec("workspace", "show or switch the active workspace", "<path>"),
+    CommandSpec("add", "reach one more folder from this conversation", "<path>"),
     CommandSpec("status", "show connection and run status"),
     CommandSpec("help", "show commands and keyboard shortcuts"),
     CommandSpec("inspect", "open developer events and traces", developer_only=True),

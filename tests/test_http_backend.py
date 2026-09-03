@@ -21,6 +21,7 @@ class FakeClient:
         self.created_threads: list[dict[str, object]] = []
         self.created_runs: list[dict[str, object]] = []
         self.commands: list[dict[str, object]] = []
+        self.folders: list[tuple[str, str]] = []
         self.closed: bool = False
 
     async def capabilities(self) -> JsonObject:
@@ -73,6 +74,10 @@ class FakeClient:
     async def send_command(self, run_id: str, command: JsonObject) -> JsonObject:
         self.commands.append({"run_id": run_id, **command})
         return {"status": "accepted"}
+
+    async def add_folder(self, thread_id: str, path: str) -> JsonObject:
+        self.folders.append((thread_id, path))
+        return {"folders": ["/tmp/project", path]}
 
     async def list_threads(self, **kwargs: str | int | None) -> JsonObject:
         del kwargs
@@ -134,7 +139,7 @@ class FakeClient:
 
 def binding() -> WorkspaceBinding:
     root = Path("/tmp/project")
-    return WorkspaceBinding("ws-1", "project", root, root, ".", "none")
+    return WorkspaceBinding("ws-1", "project", root, "none")
 
 
 async def no_server(_connection: Connection) -> None:
@@ -189,7 +194,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
 
     session = await backend.connect()
     run = await backend.start_run(
-        RunRequest("Build it", None, session.workspace_id, session.cwd_relative, "auto", "safe")
+        RunRequest("Build it", None, session.workspace_id, "auto", "safe")
     )
     streamed = [item async for item in backend.stream(run.run_id, after_seq=0, developer=False)]
     command = await backend.send_command(run.run_id, Pause())
@@ -200,7 +205,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
     assert session.workspace_path == "/tmp/project"
     assert session.protocol_version == "1.6"
     assert run.thread_id == "thread-1"
-    assert client.created_runs[0]["client_context"] == {"cwd_relative": "."}
+    assert client.created_runs[0]["client_context"] is None
     assert str(client.created_runs[0]["idempotency_key"]).startswith("idem_")
     assert [item.kind for item in streamed] == ["run.created"]
     assert command == CommandOutcome("accepted")
@@ -235,3 +240,25 @@ async def test_a_server_that_is_not_a_harness_says_so() -> None:
 
     with pytest.raises(BackendError, match="not a harness"):
         await backend.connect()
+
+
+async def test_widening_before_the_first_message_makes_the_thread() -> None:
+    """The backend widens a thread, so a folder added before anything was said needs one;
+    the id comes back so the first message continues it rather than starting another."""
+    client = FakeClient()
+    backend = HttpBackend(
+        connection(),
+        client=client,
+        server_ensurer=no_server,
+        workspace_resolver=fixed_workspace,
+    )
+    _ = await backend.connect()
+
+    first = await backend.add_folder(None, "/srv/lib")
+    again = await backend.add_folder(first.thread_id, "/srv/other")
+
+    assert first.thread_id == "thread-1"
+    assert first.folders == ("/tmp/project", "/srv/lib")
+    assert again.thread_id == "thread-1"
+    assert client.created_threads == [{"workspace_id": "ws-1", "title": ""}]
+    assert client.folders == [("thread-1", "/srv/lib"), ("thread-1", "/srv/other")]

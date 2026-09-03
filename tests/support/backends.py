@@ -22,6 +22,7 @@ from orca.backend import (
     RunInfo,
     RunRequest,
     SessionInfo,
+    ThreadFolders,
     ThreadHistoryInfo,
     ThreadSummary,
 )
@@ -56,6 +57,9 @@ class ScriptedBackend:
 
     async def switch_workspace(self, selector: str) -> SessionInfo:
         raise AssertionError(f"unexpected workspace switch: {selector!r}")
+
+    async def add_folder(self, thread_id: str | None, path: str) -> ThreadFolders:
+        raise AssertionError(f"unexpected folder for {thread_id!r}: {path!r}")
 
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         return ()

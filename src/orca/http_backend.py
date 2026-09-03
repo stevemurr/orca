@@ -27,6 +27,7 @@ from orca.backend import (
     RunRequest,
     SessionInfo,
     Steer,
+    ThreadFolders,
     ThreadHistoryInfo,
     ThreadSummary,
 )
@@ -69,6 +70,8 @@ class _BackendHttpClient(Protocol):
     ) -> AsyncGenerator[SSEEvent, None]: ...
 
     async def send_command(self, run_id: str, command: JsonObject) -> JsonObject: ...
+
+    async def add_folder(self, thread_id: str, path: str) -> JsonObject: ...
 
     async def list_threads(self, **params: str | int | None) -> JsonObject: ...
 
@@ -196,7 +199,6 @@ class HttpBackend:
                 request.message,
                 mode=request.mode or None,
                 approval_policy=request.policy or None,
-                client_context={"cwd_relative": binding.cwd_relative},
                 idempotency_key=_new_identity("idem"),
             )
         except (ApiError, KeyError) as exc:
@@ -241,6 +243,23 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
         return self._session_info()
 
+    async def add_folder(self, thread_id: str | None, path: str) -> ThreadFolders:
+        binding = self._require_binding()
+        try:
+            if not thread_id:
+                # The route widens a thread, so a widening before the first message needs
+                # one. The backend derives the title from the first message later.
+                created = await self._client.create_thread(workspace_id=binding.workspace_id)
+                thread_id = str(created["thread_id"])
+            body = await self._client.add_folder(thread_id, path)
+        except ApiError as exc:
+            raise BackendError(str(exc)) from exc
+        folders = body.get("folders")
+        return ThreadFolders(
+            thread_id,
+            tuple(str(item) for item in folders) if isinstance(folders, list) else (),
+        )
+
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         binding = self._require_binding()
         try:
@@ -261,6 +280,9 @@ class HttpBackend:
                 title=str(row.get("title") or ""),
                 latest_run_status=str(row.get("latest_run_status") or ""),
                 updated_at=str(row.get("updated_at") or ""),
+                parent=str(row.get("parent") or ""),
+                folder=str(row.get("folder") or ""),
+                root_path=str(row.get("root_path") or ""),
             )
             for row in rows
             if isinstance(row, dict) and row.get("thread_id")
@@ -333,8 +355,7 @@ class HttpBackend:
             protocol_version=self._protocol_version,
             workspace_id=binding.workspace_id,
             workspace_name=binding.name,
-            workspace_path=_display_path(binding.active_directory),
-            cwd_relative=binding.cwd_relative,
+            workspace_path=_display_path(binding.root),
         )
 
 

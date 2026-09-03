@@ -293,6 +293,9 @@ class HttpApiClient:
             return await self._idempotent_post(path, json=body, headers=headers)
         return await self._object("POST", path, json=body, headers=headers)
 
+    async def add_folder(self, thread_id: str, path: str) -> JsonObject:
+        return await self._object("POST", f"/threads/{thread_id}/folders", json={"path": path})
+
     async def list_runs(self, **params: str | int | None) -> JsonObject:
         return await self._object("GET", "/runs", params=_present(params))
 

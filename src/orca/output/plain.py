@@ -39,7 +39,6 @@ async def run_once(
             workspace_id=session.workspace_id,
             workspace_name=session.workspace_name,
             workspace_path=session.workspace_path,
-            cwd_relative=session.cwd_relative,
         ),
     ).state
     accepted = await backend.start_run(
@@ -47,7 +46,6 @@ async def run_once(
             message=request.message,
             thread_id=request.thread_id,
             workspace_id=session.workspace_id,
-            cwd_relative=session.cwd_relative,
             mode=request.mode,
             policy=request.policy,
         )

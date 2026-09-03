@@ -22,6 +22,7 @@ from orca.app.actions import (
     Connected,
     ConnectFailed,
     EventReceived,
+    FolderAdded,
     OperationFailed,
     RunAccepted,
     ThreadLoaded,
@@ -30,6 +31,7 @@ from orca.app.actions import (
 )
 from orca.app.model import AppState, ViewId
 from orca.app.update import (
+    AddFolder,
     Effect,
     ExitApplication,
     FollowRun,
@@ -254,7 +256,7 @@ class OrcaApp(App[None]):
             self._perform(effect)
 
     def invoke_command(self, name: str, argument: str = "") -> None:
-        spec_requires_argument = name in {"mode", "permissions", "workspace"}
+        spec_requires_argument = name in {"mode", "permissions", "workspace", "add"}
         if spec_requires_argument and not argument:
             composer = self.query_one(Composer)
             composer.load_text(f"/{name} ")
@@ -378,6 +380,13 @@ class OrcaApp(App[None]):
                     exclusive=True,
                     exit_on_error=False,
                 )
+            case AddFolder():
+                self.run_worker(
+                    self._add_folder(effect),
+                    name="add-folder",
+                    group="workspace",
+                    exit_on_error=False,
+                )
             case ExitApplication():
                 self.exit()
             case _:
@@ -397,7 +406,6 @@ class OrcaApp(App[None]):
                 workspace_id=info.workspace_id,
                 workspace_name=info.workspace_name,
                 workspace_path=info.workspace_path,
-                cwd_relative=info.cwd_relative,
             )
         )
         if self.model.thread_id and not self.model.turns:
@@ -409,7 +417,6 @@ class OrcaApp(App[None]):
             message=effect.message,
             thread_id=self.model.thread_id,
             workspace_id=self.model.workspace_id,
-            cwd_relative=self.model.cwd_relative,
             mode=self.model.mode,
             policy=self.model.policy,
         )
@@ -464,10 +471,17 @@ class OrcaApp(App[None]):
                 workspace_id=info.workspace_id,
                 workspace_name=info.workspace_name,
                 workspace_path=info.workspace_path,
-                cwd_relative=info.cwd_relative,
                 reset_conversation=True,
             )
         )
+
+    async def _add_folder(self, effect: AddFolder) -> None:
+        try:
+            widened = await self.backend.add_folder(effect.thread_id, effect.path)
+        except BackendError as exc:
+            self.apply_model_action(OperationFailed(str(exc)))
+            return
+        self.apply_model_action(FolderAdded(widened.thread_id, widened.folders))
 
     async def _open_threads(self) -> None:
         try:

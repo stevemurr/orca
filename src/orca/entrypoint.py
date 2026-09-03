@@ -112,7 +112,7 @@ def run_command(
         try:
             return await run_once(
                 backend,
-                RunRequest(message, thread or None, "", ".", mode, policy),
+                RunRequest(message, thread or None, "", mode, policy),
                 follow=not no_follow,
                 jsonl=jsonl,
             )

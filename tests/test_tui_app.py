@@ -17,12 +17,13 @@ from orca.backend import (
     RunInfo,
     RunRequest,
     SessionInfo,
+    ThreadFolders,
     ThreadHistoryInfo,
     ThreadSummary,
 )
 from orca.json_types import JsonObject
 from orca.tui.app import OrcaApp
-from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
+from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen, nested_threads
 from orca.tui.widgets import Composer
 
 
@@ -35,6 +36,7 @@ class FakeBackend:
         self.started: list[str] = []
         self.commands: list[tuple[str, Command]] = []
         self.streams: list[tuple[str, int, bool]] = []
+        self.widened: list[tuple[str | None, str]] = []
         self.closed: bool = False
 
     async def connect(self) -> SessionInfo:
@@ -45,7 +47,6 @@ class FakeBackend:
             workspace_id="ws-1",
             workspace_name="orca",
             workspace_path="~/Code/orca",
-            cwd_relative=".",
         )
 
     async def start_run(self, request: RunRequest) -> RunInfo:
@@ -88,6 +89,10 @@ class FakeBackend:
 
     async def switch_workspace(self, selector: str) -> SessionInfo:
         raise AssertionError(f"unexpected workspace switch: {selector}")
+
+    async def add_folder(self, thread_id: str | None, path: str) -> ThreadFolders:
+        self.widened.append((thread_id, path))
+        return ThreadFolders(thread_id or "thread-made", ("/Users/murr/Code/orca", path))
 
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         return (
@@ -395,3 +400,38 @@ async def test_explicit_thread_replays_on_boot() -> None:
         assert app.model.thread_id == "thread-recent"
         assert app.model.turns[-1].request == "Polish the terminal"
         assert app.model.turns[-1].answer == "Polished it."
+
+
+async def test_add_widens_the_conversation_and_names_the_folder_in_the_header() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.load_text("/add /srv/lib")
+        composer.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert backend.widened == [(None, "/srv/lib")]
+        assert app.model.thread_id == "thread-made"
+        assert app.model.folders == ("/Users/murr/Code/orca", "/srv/lib")
+        assert app.model.notices[-1].message.startswith("folder added:")
+
+
+def test_the_picker_nests_a_delegated_thread_under_its_parent() -> None:
+    rows = (
+        ThreadSummary("child-late", parent="parent"),
+        ThreadSummary("other"),
+        ThreadSummary("parent"),
+        ThreadSummary("orphan", parent="gone"),
+    )
+
+    assert [row.thread_id for row in nested_threads(rows)] == [
+        "other",
+        "parent",
+        "child-late",
+        "orphan",
+    ]

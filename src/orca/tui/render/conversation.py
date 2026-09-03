@@ -10,7 +10,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from orca.app.model import AppState, Notice, TurnState
+from orca.app.model import AppState, Notice, TurnNote, TurnState
 from orca.tui.render.markdown import answer_markdown
 from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNING
 
@@ -44,6 +44,8 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 glyph, style = _progress_glyph(item.status)
                 activity.add_row(Text(glyph, style=style), Text(item.text, style=MUTED))
             rows.append(Padding(activity, (0, 1)))
+        for note in turn.notes:
+            rows.append(Padding(_note_row(note), (0, 1)))
         answer = turn.answer or turn.provisional_answer
         if answer:
             rows.append(Rule(style=CALLOUT))
@@ -130,6 +132,8 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
     details.add_column(width=11, style=MUTED, no_wrap=True)
     details.add_column(ratio=1, overflow="fold")
     details.add_row("workspace", state.workspace_path or "resolving…")
+    for folder in state.folders:
+        details.add_row("folder", folder)
     details.add_row("connection", state.endpoint or "resolving…")
     details.add_row("session", f"{state.mode} · {state.policy}")
     panel = Panel(
@@ -141,6 +145,11 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
     )
     tip = Text.assemble(("Tip: ", MUTED), ("/help", ACCENT), (" lists every command", MUTED))
     return [panel, tip]
+
+
+def _note_row(note: TurnNote) -> Text:
+    glyph = {"compaction": "⇥", "steer": "↳", "folder": "+"}[note.kind]
+    return Text.assemble((f"{glyph} ", ACCENT), (note.text, f"italic {MUTED}"))
 
 
 def notice_row(notice: Notice) -> Text:

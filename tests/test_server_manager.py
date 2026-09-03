@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from orca import entrypoint as cli
 from orca.connection import Connection, CredentialSource
-from orca.server_manager import LocalServerManager, can_manage
+from orca.server_manager import LocalServerManager, can_manage, child_environment
 
 STUB = Path(__file__).parent / "support" / "stub_backend.py"
 
@@ -95,3 +95,30 @@ def test_server_commands_start_inspect_and_stop_one_background_process(
 
     assert stopped.exit_code == 0, stopped.output
     assert "stopped" in stopped.output
+
+
+def test_a_started_server_is_told_the_credential_by_the_name_it_reads() -> None:
+    """The harness reads `HARNESS_TOKEN`. Forwarding the credential as `ORCA_AUTH_TOKEN`
+    started a server that required no token while orca kept sending one."""
+    connection = Connection(
+        profile="default",
+        endpoint="http://127.0.0.1:8420",
+        token="secret",
+        credential_source=CredentialSource.KEYRING,
+    )
+    environ = {
+        "ORCA_SERVER_COMMAND": "harness serve",
+        "ORCA_AUTH_TOKEN": "client-side",
+        "ORCA_PROFILE": "default",
+        "ORCA_CUSTOM": "kept",
+        "PATH": "/usr/bin",
+    }
+
+    told = child_environment(connection, "inst-1", environ)
+
+    assert told == {
+        "ORCA_SERVER_COMMAND": "harness serve",
+        "ORCA_CUSTOM": "kept",
+        "HARNESS_TOKEN": "secret",
+        "ORCA_MANAGED_INSTANCE_ID": "inst-1",
+    }

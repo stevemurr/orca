@@ -1,9 +1,11 @@
 """Resolve the folder an orca session actually operates in.
 
 The backend owns workspace policy and execution.  The client owns the local launch context: it
-is the only side that knows which directory the human was standing in and which relative path
-they typed.  Keeping that discovery here prevents the presentation layer from inventing a
-prettier path than the one attached to the run.
+is the only side that can see where the person was standing, so it is the side that finds the
+nearest checkout and asks for that folder to be bound.  The backend then works in that folder
+and nowhere else -- it has no notion of a subdirectory a person is focused on -- so the client
+records the folder alone.  It used to carry the launch subdirectory beside it and show that in
+the header, which named a folder the run never worked in. (2026-09-03)
 """
 
 from __future__ import annotations
@@ -38,11 +40,9 @@ class WorkspaceClient(Protocol):
 
 @dataclass(frozen=True)
 class LocalWorkspace:
-    """A local project root plus the directory the human is focused on inside it."""
+    """A local project root, as discovered from wherever the person launched."""
 
     root: Path
-    active_directory: Path
-    cwd_relative: str
     vcs: Literal["git", "none"]
 
 
@@ -53,8 +53,6 @@ class WorkspaceBinding:
     workspace_id: str
     name: str
     root: Path
-    active_directory: Path
-    cwd_relative: str
     vcs: Literal["git", "none"]
 
 
@@ -82,20 +80,9 @@ def discover_local_workspace(path: Path) -> LocalWorkspace:
             break
         marker = candidate / ".git"
         if marker.is_dir() or marker.is_file():
-            relative = active.relative_to(candidate)
-            return LocalWorkspace(
-                root=candidate,
-                active_directory=active,
-                cwd_relative=relative.as_posix() or ".",
-                vcs="git",
-            )
+            return LocalWorkspace(root=candidate, vcs="git")
 
-    return LocalWorkspace(
-        root=active,
-        active_directory=active,
-        cwd_relative=".",
-        vcs="none",
-    )
+    return LocalWorkspace(root=active, vcs="none")
 
 
 def explicit_external_path(message: str, base_directory: Path, current_root: Path) -> Path | None:
@@ -274,22 +261,14 @@ def _binding_from_record(
     workspace: JsonObject, *, local: LocalWorkspace | None = None
 ) -> WorkspaceBinding:
     root = Path(str(workspace["root_path"])).expanduser().resolve()
-    context = local or LocalWorkspace(
-        root=root,
-        active_directory=root,
-        cwd_relative=".",
-        vcs="git" if workspace.get("vcs", "git") == "git" else "none",
-    )
     return WorkspaceBinding(
         workspace_id=str(workspace["workspace_id"]),
         name=str(workspace.get("name") or root.name),
         root=root,
-        active_directory=context.active_directory,
-        cwd_relative=context.cwd_relative,
         # A local discovery is the current filesystem fact. The record is authoritative only
         # for selector-only bindings whose path this client did not inspect.
         vcs=(
-            context.vcs
+            local.vcs
             if local is not None
             else ("git" if workspace.get("vcs", "git") == "git" else "none")
         ),

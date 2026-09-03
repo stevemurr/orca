@@ -20,16 +20,17 @@ uv run orca run "…"            # one run, plain text, no UI
 ## The contract
 
 `orca.backend.TerminalBackend` is the whole boundary. Everything above it — the reducer, the
-renderers, the Textual host, the plain and JSONL output modes — is written against these eight
+renderers, the Textual host, the plain and JSONL output modes — is written against these nine
 methods and nothing else.
 
 ```python
 class TerminalBackend(Protocol):
     async def connect(self) -> SessionInfo: ...
     async def start_run(self, request: RunRequest) -> RunInfo: ...
-    def stream(self, run_id: str, *, after_seq: int, developer: bool) -> AsyncIterator[TaskEvent]: ...
+    def stream(self, run_id: str, *, after_seq: int, developer: bool) -> AsyncGenerator[TaskEvent, None]: ...
     async def send_command(self, run_id: str, command: Command) -> CommandOutcome: ...
     async def switch_workspace(self, selector: str) -> SessionInfo: ...
+    async def add_folder(self, thread_id: str | None, path: str) -> ThreadFolders: ...
     async def recent_threads(self) -> tuple[ThreadSummary, ...]: ...
     async def load_thread(self, thread_id: str) -> ThreadHistoryInfo: ...
     async def close(self) -> None: ...
@@ -42,6 +43,7 @@ class TerminalBackend(Protocol):
 | `stream(run_id, after_seq, developer)` | Yield that run's events in `seq` order, starting after `after_seq`. An async generator, so no `await` on the call. Return when the run reaches a terminal event. |
 | `send_command(run_id, command)` | Act on a run in flight. `command` is the `Command` union — `Pause`, `Resume`, `Cancel`, `Steer(content)`, `Answer(question_id, content)`, `ResolveApproval(approval_id, decision)` — so match on it. Raise `BackendError` for one you cannot honour; a command that vanishes reads as a hang. `CommandOutcome.status` becomes a one-line notice. |
 | `switch_workspace(selector)` | Rebind the session to another folder, named however a person would name it — a path, a name, an id. Resolve it or raise; orca never guesses. |
+| `add_folder(thread_id, path)` | Let the conversation reach one more folder, now and on every later run. The working folder does not change. `thread_id` is `None` before the first message: make the thread and return its id in `ThreadFolders`, and orca keeps using it. |
 | `recent_threads()` | List conversations a person might continue, most recent first, as `ThreadSummary` rows. Only `thread_id` is required; the rest render as sensible blanks. Return `()` if you have no history. |
 | `load_thread(thread_id)` | Read one conversation's bounded history. Reading only — following a live run is `stream`'s job. |
 | `close()` | Release what `connect` acquired. Called once, on the way out. Durable work outlives the client, so this closes connections; it does not cancel runs. |
@@ -155,10 +157,18 @@ a launcher script you run instead of the `orca` command.
 
 import asyncio
 import itertools
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from orca.app.model import TaskEvent
-from orca.backend import SessionInfo, RunInfo, RunRequest, ThreadHistoryInfo
+from orca.backend import (
+    CommandOutcome,
+    RunInfo,
+    RunRequest,
+    SessionInfo,
+    ThreadFolders,
+    ThreadHistoryInfo,
+    ThreadSummary,
+)
 from orca.tui.app import OrcaApp
 
 
@@ -184,7 +194,7 @@ class EchoBackend:
 
     async def stream(
         self, run_id: str, *, after_seq: int, developer: bool
-    ) -> AsyncIterator[TaskEvent]:
+    ) -> AsyncGenerator[TaskEvent, None]:
         message = self._pending.pop(run_id, "")
         events = [
             ("run.created", {"message": message}),
@@ -202,6 +212,9 @@ class EchoBackend:
 
     async def switch_workspace(self, selector: str) -> SessionInfo:
         return await self.connect()
+
+    async def add_folder(self, thread_id: str | None, path: str) -> ThreadFolders:
+        return ThreadFolders(thread_id or "thread-1", ("~/Code/example", path))
 
     async def recent_threads(self) -> tuple[ThreadSummary, ...]:
         return ()
@@ -241,7 +254,7 @@ exit_code = asyncio.run(
 | `/chat` `/review` `/threads` `/new` | conversation, the result and its artifacts, pick a conversation, start one |
 | `/resume` `/pause` `/cancel` | act on the run in flight |
 | `/mode <m>` `/permissions <p>` | set the two strings passed to the backend on the next turn |
-| `/workspace <path>` `/status` `/help` | rebind the folder, report, list everything |
+| `/workspace <path>` `/add <path>` `/status` `/help` | rebind the folder, reach one more folder from this conversation, report, list everything |
 | `/inspect` | developer events, on their own cursor, never mixed into the conversation |
 | Enter · Shift+Enter · Esc · Ctrl+P | send · newline · back, or pause from the conversation · command palette |
 
