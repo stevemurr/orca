@@ -188,13 +188,14 @@ def _activity_table(items: list[ProgressItem], state: AppState) -> RenderableTyp
     folded = len(items) - len(shown)
     for item in shown:
         glyph, style, text_style = _activity_look(item)
-        line = (
-            shimmer(item.text, state.clock)
-            if item.status.lower() == "active" and state.working
-            else Text(item.text, style=text_style)
-        )
-        if folded:
-            line.append(f"  ·  {folded + 1} tool calls ›", style=MUTED)
+        count = f"  ·  {folded + 1} tool calls ›" if folded else ""
+        if item.status.lower() == "active" and state.working:
+            # The whole line shines, count included: folded, the count is part of what a
+            # person is watching.
+            line = shimmer(item.text + count, state.clock)
+        else:
+            line = Text(item.text, style=text_style)
+            line.append(count, style=MUTED)
         activity.add_row(Text(glyph, style=style), line)
         for snippet in item.snippets:
             # The code under its row, the way an editor's transcript shows a write.
