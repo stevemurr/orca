@@ -114,7 +114,9 @@ def shimmer(text: str, clock: float) -> Text:
     the same words, muted, with a few brighter cells that move left to right and wrap. Pure
     in the clock, so a still frame is a still frame and a test can pin one.
     """
-    line = Text(text, style=MUTED)
+    # Bold throughout: a lit row is the one being watched, and reads that way even in a
+    # frame where the band is off the text. The band brightens it further as it passes.
+    line = Text(text, style=f"bold {MUTED}")
     if not text:
         return line
     span = len(text) + _SHINE_WIDTH
