@@ -58,10 +58,27 @@ class ThreadReplay:
 
 
 @dataclass(frozen=True, slots=True)
+class Snippet:
+    """Code a tool call is about: the file a write creates, or the change an edit makes.
+
+    Read from the call's raw arguments -- `content` for a write, `old` and `new` for an
+    edit -- so a person sees the code, not a byte count. Shown on an approval before the
+    call, and under the activity row in the transcript after it.
+    """
+
+    title: str
+    #: A lexer name, or empty to guess from `title`.
+    language: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProgressItem:
     update_id: str
     text: str
     status: str = "active"
+    #: The code this call wrote or changed, when the event carried its arguments.
+    snippets: tuple[Snippet, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,20 +133,6 @@ class Activity:
 #: its activity rows and its answer apart and render every row above the whole answer, so a
 #: tool called between two paragraphs showed up before the first. (2026-09-03)
 Segment = Narration | Activity | TurnNote
-
-
-@dataclass(frozen=True, slots=True)
-class Snippet:
-    """Code an approval is about: the file a write would create, or the change an edit makes.
-
-    Read from the request's raw arguments -- `content` for a write, `old` and `new` for an
-    edit -- so a person judges the code, not a byte count.
-    """
-
-    title: str
-    #: A lexer name, or empty to guess from `title`.
-    language: str
-    text: str
 
 
 @dataclass(frozen=True, slots=True)

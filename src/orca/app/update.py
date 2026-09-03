@@ -459,12 +459,18 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         text = _string(payload, "text").strip()
         if not update_id or not text:
             return Transition(state)
+        turn = _latest_turn(state)
+        held = next((entry for entry in turn.progress if entry.update_id == update_id), None)
+        arguments = payload.get("arguments")
         item = ProgressItem(
             update_id=update_id,
             text=text,
             status=_string(payload, "status") or "active",
+            # An event without arguments does not take away the code an earlier one showed.
+            snippets=_snippets(arguments)
+            if isinstance(arguments, Mapping)
+            else (held.snippets if held is not None else ()),
         )
-        turn = _latest_turn(state)
         progress = _upsert_by(turn.progress, item, lambda entry: entry.update_id)
         timeline = turn.timeline
         if all(entry.update_id != update_id for entry in turn.progress):

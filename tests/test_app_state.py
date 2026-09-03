@@ -498,3 +498,25 @@ def test_an_approval_carries_the_code_it_is_about() -> None:
     assert diff.language == "diff"
     assert "-a = 1" in diff.text and "+a = 2" in diff.text
     assert shell.interaction is not None and shell.interaction.snippets == ()
+
+
+def test_a_call_that_wrote_code_carries_it_and_an_upsert_keeps_it() -> None:
+    written = event(
+        2,
+        "run.progress",
+        {
+            "update_id": "w1",
+            "text": "write src/app.py (12 bytes)",
+            "status": "active",
+            "arguments": {"path": "src/app.py", "content": "print('hi')\n"},
+        },
+    )
+    settled = event(
+        3, "run.progress", {"update_id": "w1", "text": "write src/app.py", "status": "completed"}
+    )
+
+    state = feed(_running(), written, settled)
+
+    (row,) = state.turns[-1].progress
+    assert row.status == "completed"
+    assert row.snippets == (Snippet("src/app.py", "", "print('hi')\n"),)

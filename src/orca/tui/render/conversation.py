@@ -20,6 +20,7 @@ from orca.app.model import (
     TurnNote,
     TurnState,
 )
+from orca.tui.render.code import code_block
 from orca.tui.render.markdown import answer_markdown
 from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNING
 
@@ -124,7 +125,15 @@ def _activity_table(items: list[ProgressItem]) -> RenderableType:
     for item in items:
         glyph, style = _progress_glyph(item.status)
         activity.add_row(Text(glyph, style=style), Text(item.text, style=MUTED))
+        for snippet in item.snippets:
+            # The code under its row, the way an editor's transcript shows a write.
+            activity.add_row(Text(""), code_block(snippet, lines=_TRANSCRIPT_LINES))
     return activity
+
+
+#: Lines of a written file shown in the transcript. Enough to read what was written; a
+#: whole file is the file's job.
+_TRANSCRIPT_LINES = 40
 
 
 def _plan_checklist(turn: TurnState) -> RenderableType:

@@ -5,12 +5,12 @@ from __future__ import annotations
 from rich import box
 from rich.console import Group, RenderableType
 from rich.panel import Panel
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
 from orca.app.commands import visible_commands
-from orca.app.model import AppState, RunStatus, Snippet
+from orca.app.model import AppState, RunStatus
+from orca.tui.render.code import code_block
 from orca.tui.render.theme import (
     ACCENT,
     ERROR,
@@ -72,7 +72,7 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
         rows.append(Text(f"$ {interaction.command}", style=WARNING, overflow="fold"))
     for snippet in interaction.snippets:
         rows.append(Text(snippet.title, style=f"bold {MUTED}"))
-        rows.append(_code(snippet, width=max(1, width - 4)))
+        rows.append(code_block(snippet, lines=_APPROVAL_LINES, width=max(1, width - 4)))
     if interaction.options:
         for index, option in enumerate(interaction.options, start=1):
             rows.append(Text.assemble((f"{index}", f"bold {ACCENT}"), (f" {option}", MUTED)))
@@ -142,19 +142,9 @@ def render_help(*, developer: bool = False) -> RenderableType:
     return Group(Text("Commands", style="bold"), table, Text(""), Text("Keys", style="bold"), keys)
 
 
-#: Lines of code shown before the rest is elided. The card scrolls, so this is about a person
-#: finding the choices, not about fitting a screen.
-_SNIPPET_LINES = 120
-
-
-def _code(snippet: Snippet, *, width: int) -> RenderableType:
-    lines = snippet.text.splitlines()
-    shown = "\n".join(lines[:_SNIPPET_LINES])
-    lexer = snippet.language or Syntax.guess_lexer(snippet.title, code=shown)
-    block = Syntax(shown, lexer, theme="ansi_dark", word_wrap=True, code_width=width)
-    if len(lines) <= _SNIPPET_LINES:
-        return block
-    return Group(block, Text(f"… {len(lines) - _SNIPPET_LINES} more lines", style=MUTED))
+#: Lines of code shown on an approval before the rest is elided. The card scrolls, so this
+#: is about a person finding the choices, not about fitting a screen.
+_APPROVAL_LINES = 120
 
 
 def _folder_name(path: str) -> str:

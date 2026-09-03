@@ -291,3 +291,29 @@ def test_an_approval_shows_the_code_it_would_write() -> None:
     assert "src/app.py" in rendered
     assert "def greet():" in rendered
     assert "return 'hi'" in rendered
+
+
+def test_the_transcript_shows_the_code_a_call_wrote_under_its_row() -> None:
+    from orca.app.model import Snippet
+
+    turn = TurnState(
+        "run-1",
+        request="Write it",
+        progress=(
+            ProgressItem(
+                "w1",
+                "write src/app.py (30 bytes)",
+                "completed",
+                snippets=(Snippet("src/app.py", "", "def greet():\n    return 'hi'\n"),),
+            ),
+        ),
+        answer="Written.",
+    )
+    state = replace(populated_state(), turns=(turn,))
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+
+    row = rendered.index("write src/app.py")
+    code = rendered.index("def greet():")
+    answer = rendered.index("Written.")
+    assert row < code < answer
