@@ -98,6 +98,41 @@ class TurnNote:
 
 
 @dataclass(frozen=True, slots=True)
+class Narration:
+    """A stretch of the model's own words, between activity rows."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Activity:
+    """An activity row's place in the turn. The row itself lives in `TurnState.progress`, where
+    a later event upserts it by id without moving it."""
+
+    update_id: str
+
+
+#: One turn as it happened: words, tool calls and notes in arrival order. A turn used to keep
+#: its activity rows and its answer apart and render every row above the whole answer, so a
+#: tool called between two paragraphs showed up before the first. (2026-09-03)
+Segment = Narration | Activity | TurnNote
+
+
+@dataclass(frozen=True, slots=True)
+class Snippet:
+    """Code an approval is about: the file a write would create, or the change an edit makes.
+
+    Read from the request's raw arguments -- `content` for a write, `old` and `new` for an
+    edit -- so a person judges the code, not a byte count.
+    """
+
+    title: str
+    #: A lexer name, or empty to guess from `title`.
+    language: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class TurnState:
     run_id: str
     request: str = ""
@@ -112,8 +147,8 @@ class TurnState:
     #: Replaced wholesale by each `plan.progress`, because that is what the event carries.
     plan: tuple[PlanStep, ...] = ()
     plan_explanation: str = ""
-    #: In the order they arrived, after the activity rows they interleaved with.
     notes: tuple[TurnNote, ...] = ()
+    timeline: tuple[Segment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +163,8 @@ class InteractionState:
     #: For a question: the agent's guesses at the answer. Hints, not a closed set -- a
     #: person may pick one by number or type something else.
     options: tuple[str, ...] = ()
+    #: For an approval: the code it is about, when the arguments carry any.
+    snippets: tuple[Snippet, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

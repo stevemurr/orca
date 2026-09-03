@@ -10,7 +10,16 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from orca.app.model import AppState, Notice, TurnNote, TurnState
+from orca.app.model import (
+    Activity,
+    AppState,
+    Narration,
+    Notice,
+    ProgressItem,
+    Segment,
+    TurnNote,
+    TurnState,
+)
 from orca.tui.render.markdown import answer_markdown
 from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNING
 
@@ -36,21 +45,26 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
         if turn.plan:
             # Intent frames activity; the active step is the checklist's only prominent line.
             rows.append(Padding(_plan_checklist(turn), (0, 1)))
-        if turn.progress:
-            activity = Table.grid(padding=(0, 1))
-            activity.add_column(width=2, no_wrap=True)
-            activity.add_column(ratio=1, overflow="fold")
-            for item in turn.progress:
-                glyph, style = _progress_glyph(item.status)
-                activity.add_row(Text(glyph, style=style), Text(item.text, style=MUTED))
-            rows.append(Padding(activity, (0, 1)))
-        for note in turn.notes:
-            rows.append(Padding(_note_row(note), (0, 1)))
-        answer = turn.answer or turn.provisional_answer
-        if answer:
-            rows.append(Rule(style=CALLOUT))
-            rows.append(Padding(answer_markdown(answer), (0, 1)))
-        elif turn.status in {"queued", "running"}:
+        by_id = {item.update_id: item for item in turn.progress}
+        narrated = False
+        pending: list[ProgressItem] = []
+        for segment in (*_timeline(turn), None):
+            if isinstance(segment, Activity):
+                if (item := by_id.get(segment.update_id)) is not None:
+                    pending.append(item)
+                continue
+            if pending:
+                # Consecutive rows share one table so their glyphs line up.
+                rows.append(Padding(_activity_table(pending), (0, 1)))
+                pending = []
+            if isinstance(segment, Narration):
+                if not narrated:
+                    rows.append(Rule(style=CALLOUT))
+                narrated = True
+                rows.append(Padding(answer_markdown(segment.text), (0, 1)))
+            elif isinstance(segment, TurnNote):
+                rows.append(Padding(_note_row(segment), (0, 1)))
+        if not narrated and turn.status in {"queued", "running"}:
             rows.append(Padding(Text("● Working", style=f"bold {ACCENT}"), (0, 1)))
         for artifact in turn.artifacts:
             label = artifact.reference or artifact.artifact_id
@@ -89,6 +103,26 @@ def render_review(state: AppState, *, width: int) -> RenderableType:
             artifacts.add_row(artifact.kind, artifact.reference or artifact.artifact_id)
         rows.append(artifacts)
     return Group(*rows)
+
+
+def _timeline(turn: TurnState) -> tuple[Segment, ...]:
+    """The turn in arrival order, or the older shape -- every row, then the answer -- for a
+    turn built without one."""
+    if turn.timeline:
+        return turn.timeline
+    answer = turn.answer or turn.provisional_answer
+    rows: tuple[Segment, ...] = tuple(Activity(item.update_id) for item in turn.progress)
+    return (*rows, *turn.notes, *((Narration(answer),) if answer else ()))
+
+
+def _activity_table(items: list[ProgressItem]) -> RenderableType:
+    activity = Table.grid(padding=(0, 1))
+    activity.add_column(width=2, no_wrap=True)
+    activity.add_column(ratio=1, overflow="fold")
+    for item in items:
+        glyph, style = _progress_glyph(item.status)
+        activity.add_row(Text(glyph, style=style), Text(item.text, style=MUTED))
+    return activity
 
 
 def _plan_checklist(turn: TurnState) -> RenderableType:

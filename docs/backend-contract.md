@@ -247,7 +247,7 @@ which is the one failure this rule exists to prevent.
 | `answer.delta` | `effect_id`, `model_call_id`, `text` | Streams the answer. The pair identifies one attempt; a delta from a different pair discards what was streamed and starts again. Both are opaque — repeat one value in both if you have a single attempt identity. |
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
-| `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments.argv`, `allowed_decisions` | Modal, and the run parks. `title` is what a person judges; `arguments.argv` is shown as a shell-quoted command line. |
+| `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments`, `allowed_decisions` | Modal, and the run parks. `title` is what a person judges. From `arguments`: `argv` is shown as a shell-quoted command line; `path` with `content` is shown as the file, highlighted by its extension; `path` with `old` and `new` is shown as a diff. |
 | `approval.resolved` | — | Dismisses it. A run paused under the modal stays paused: send `run.paused` again after this, since orca reads a resolution as running. |
 | `question.requested` | `question_id`, `prompt`, `options[]` | Inline above the composer; the next thing typed is the answer. `options` are the agent's guesses, shown numbered — a number picks one, anything else is sent as typed, and an empty answer is sent as "I am not answering". |
 | `question.resolved` | — | Dismisses it. |

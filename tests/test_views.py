@@ -20,6 +20,7 @@ from orca.tui.render import (
     render_conversation,
     render_footer,
     render_header,
+    render_interaction,
     render_review,
 )
 from orca.tui.render.theme import ACCENT
@@ -249,3 +250,44 @@ def test_header_names_the_folders_a_conversation_reaches_beyond_the_workspace() 
     rendered = plain(render_header(state, width=100), width=100)
 
     assert "~/Code/orca  + orca, lib" in rendered
+
+
+def test_the_transcript_shows_a_tool_call_where_it_happened() -> None:
+    from orca.app.model import Activity, Narration
+
+    turn = TurnState(
+        "run-1",
+        request="Fix it",
+        progress=(ProgressItem("ls", "run: ls", "completed"),),
+        provisional_answer="Looking first.\n\nNow the fix.",
+        timeline=(Narration("Looking first."), Activity("ls"), Narration("\n\nNow the fix.")),
+    )
+    state = replace(populated_state(), turns=(turn,))
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+
+    first = rendered.index("Looking first.")
+    call = rendered.index("run: ls")
+    second = rendered.index("Now the fix.")
+    assert first < call < second
+
+
+def test_an_approval_shows_the_code_it_would_write() -> None:
+    from orca.app.model import InteractionState, Snippet
+
+    state = replace(
+        populated_state(),
+        interaction=InteractionState(
+            kind="approval",
+            request_id="a1",
+            title="write src/app.py (20 bytes)",
+            allowed_decisions=("approve", "reject"),
+            snippets=(Snippet("src/app.py", "", "def greet():\n    return 'hi'\n"),),
+        ),
+    )
+
+    rendered = plain(render_interaction(state, width=80), width=80)
+
+    assert "src/app.py" in rendered
+    assert "def greet():" in rendered
+    assert "return 'hi'" in rendered

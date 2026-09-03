@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -29,14 +30,18 @@ from orca.app.actions import (
 )
 from orca.app.commands import parse_input
 from orca.app.model import (
+    Activity,
     AppState,
     ArtifactOffer,
     InteractionState,
+    Narration,
     Notice,
     NoticeLevel,
     PlanStep,
     ProgressItem,
     RunStatus,
+    Segment,
+    Snippet,
     TaskEvent,
     TurnNote,
     TurnNoteKind,
@@ -461,7 +466,12 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
         turn = _latest_turn(state)
         progress = _upsert_by(turn.progress, item, lambda entry: entry.update_id)
-        state = _replace_latest_turn(state, replace(turn, progress=progress, status="running"))
+        timeline = turn.timeline
+        if all(entry.update_id != update_id for entry in turn.progress):
+            timeline = (*timeline, Activity(update_id))
+        state = _replace_latest_turn(
+            state, replace(turn, progress=progress, timeline=timeline, status="running")
+        )
         return Transition(state)
 
     if kind == "answer.delta":
@@ -470,11 +480,18 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             return Transition(state)
         turn = _latest_turn(state)
         stream = (_string(payload, "effect_id"), _string(payload, "model_call_id"))
-        previous = turn.provisional_answer if stream == turn.answer_stream else ""
+        same_attempt = stream == turn.answer_stream
+        previous = turn.provisional_answer if same_attempt else ""
+        timeline = turn.timeline if same_attempt else _without_narration(turn.timeline)
+        if timeline and isinstance(timeline[-1], Narration):
+            timeline = (*timeline[:-1], Narration(timeline[-1].text + text))
+        else:
+            timeline = (*timeline, Narration(text))
         turn = replace(
             turn,
             provisional_answer=previous + text,
             answer_stream=stream,
+            timeline=timeline,
         )
         return Transition(_replace_latest_turn(state, turn))
 
@@ -523,12 +540,14 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         decisions = tuple(str(item) for item in allowed) if isinstance(allowed, list) else ()
         arguments = payload.get("arguments")
         command = ""
+        snippets: tuple[Snippet, ...] = ()
         if isinstance(arguments, Mapping):
             argv = arguments.get("argv")
             if isinstance(argv, list):
                 words = [item for item in argv if isinstance(item, str)]
                 if len(words) == len(argv):
                     command = shlex.join(words)
+            snippets = _snippets(arguments)
         interaction = InteractionState(
             kind="approval",
             request_id=_string(payload, "approval_id") or event.event_id,
@@ -537,6 +556,7 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             command=command,
             risk=_string(payload, "risk"),
             allowed_decisions=decisions,
+            snippets=snippets,
         )
         return Transition(
             replace(state, interaction=interaction, run_status=RunStatus.AWAITING_APPROVAL)
@@ -596,11 +616,20 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
     if terminal is not None:
         turn = _latest_turn(state)
         summary = _string(payload, "summary")
+        # The summary replaces what was streamed. When it is the streamed text -- which is
+        # what the harness sends -- the turn keeps its shape, words and tool calls in the
+        # order they happened; otherwise the narration is replaced by the summary, whole.
+        timeline = turn.timeline
+        if summary != turn.provisional_answer:
+            timeline = _without_narration(timeline)
+            if summary:
+                timeline = (*timeline, Narration(summary))
         turn = replace(
             turn,
             answer=summary,
             provisional_answer="",
             status=terminal.value,
+            timeline=timeline,
         )
         return Transition(
             _replace_latest_turn(
@@ -656,7 +685,39 @@ def _note(state: AppState, kind: TurnNoteKind, text: str) -> AppState:
     if not text:
         return state
     turn = _latest_turn(state)
-    return _replace_latest_turn(state, replace(turn, notes=(*turn.notes, TurnNote(kind, text))))
+    note = TurnNote(kind, text)
+    return _replace_latest_turn(
+        state, replace(turn, notes=(*turn.notes, note), timeline=(*turn.timeline, note))
+    )
+
+
+def _without_narration(timeline: tuple[Segment, ...]) -> tuple[Segment, ...]:
+    return tuple(item for item in timeline if not isinstance(item, Narration))
+
+
+def _snippets(arguments: JsonObject) -> tuple[Snippet, ...]:
+    """The code a request's arguments carry, if any, in the shape a person judges it in.
+
+    A write is the file as it will be; an edit is the change as a diff. Which one is told by
+    the arguments themselves -- `content`, or `old` and `new` -- because the request does not
+    name its tool and the arguments are the fact being approved.
+    """
+    path = _string(arguments, "path")
+    content = arguments.get("content")
+    if isinstance(content, str):
+        return (Snippet(path or "file", "", content),)
+    old, new = arguments.get("old"), arguments.get("new")
+    if isinstance(old, str) and isinstance(new, str):
+        change = "".join(
+            difflib.unified_diff(
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
+                fromfile=path or "before",
+                tofile=path or "after",
+            )
+        )
+        return (Snippet(path or "edit", "diff", change),)
+    return ()
 
 
 def _chosen_option(options: tuple[str, ...], text: str) -> str:

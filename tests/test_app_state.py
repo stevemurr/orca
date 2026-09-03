@@ -17,7 +17,17 @@ from orca.app.actions import (
     ThreadSelected,
 )
 from orca.app.commands import ParsedCommand, parse_input
-from orca.app.model import AppState, RunStatus, TaskEvent, ThreadReplay, TurnNote, ViewId
+from orca.app.model import (
+    Activity,
+    AppState,
+    Narration,
+    RunStatus,
+    Snippet,
+    TaskEvent,
+    ThreadReplay,
+    TurnNote,
+    ViewId,
+)
 from orca.app.update import AddFolder, FollowRun, LoadThread, SendRunCommand, reduce
 from orca.backend import Answer
 from orca.json_types import JsonObject
@@ -380,3 +390,111 @@ def test_add_asks_the_backend_and_keeps_the_thread_it_made() -> None:
     )
     # A new conversation reaches the workspace only.
     assert reduce(widened, CommandInvoked("new", "")).state.folders == ()
+
+
+def _delta(sequence: int, text: str) -> TaskEvent:
+    return event(
+        sequence, "answer.delta", {"effect_id": "run-1", "model_call_id": "run-1", "text": text}
+    )
+
+
+def _call(sequence: int, update_id: str, status: str) -> TaskEvent:
+    return event(
+        sequence,
+        "run.progress",
+        {"update_id": update_id, "text": f"run: {update_id}", "status": status},
+    )
+
+
+def test_a_turn_keeps_words_and_tool_calls_in_the_order_they_happened() -> None:
+    """A tool called between two paragraphs used to render above both, because rows and
+    answer were kept apart. The timeline records arrival order; an upsert does not move a
+    row; a note lands where it was said."""
+    state = feed(
+        _running(),
+        _delta(2, "Looking first."),
+        _call(3, "ls", "active"),
+        _call(4, "ls", "completed"),
+        _delta(5, "\n\nNow the fix."),
+        event(6, "run.steered", {"content": "smaller"}),
+        _delta(7, " Done."),
+    )
+
+    assert state.turns[-1].timeline == (
+        Narration("Looking first."),
+        Activity("ls"),
+        Narration("\n\nNow the fix."),
+        TurnNote("steer", "smaller"),
+        Narration(" Done."),
+    )
+    assert state.turns[-1].provisional_answer == "Looking first.\n\nNow the fix. Done."
+
+
+def test_a_summary_that_is_the_streamed_text_keeps_the_turns_shape() -> None:
+    streamed = feed(
+        _running(), _delta(2, "First."), _call(3, "ls", "completed"), _delta(4, " Last.")
+    )
+
+    same = feed(streamed, event(5, "run.completed", {"summary": "First. Last."}))
+    other = feed(streamed, event(5, "run.completed", {"summary": "A different ending."}))
+
+    assert same.turns[-1].timeline == (Narration("First."), Activity("ls"), Narration(" Last."))
+    assert same.turns[-1].answer == "First. Last."
+    # A summary that is not what was streamed replaces the narration, whole, after the rows.
+    assert other.turns[-1].timeline == (Activity("ls"), Narration("A different ending."))
+
+
+def test_a_new_answer_attempt_drops_the_abandoned_narration_but_not_the_rows() -> None:
+    state = feed(
+        _running(),
+        _delta(2, "abandoned"),
+        _call(3, "ls", "completed"),
+        event(4, "answer.delta", {"effect_id": "x", "model_call_id": "y", "text": "fresh"}),
+    )
+
+    assert state.turns[-1].timeline == (Activity("ls"), Narration("fresh"))
+
+
+def test_an_approval_carries_the_code_it_is_about() -> None:
+    write = feed(
+        _running(),
+        event(
+            2,
+            "approval.requested",
+            {
+                "approval_id": "a1",
+                "title": "write src/app.py (20 bytes)",
+                "arguments": {"path": "src/app.py", "content": "print('hi')\n"},
+                "allowed_decisions": ["approve", "reject"],
+            },
+        ),
+    )
+    change = feed(
+        _running(),
+        event(
+            2,
+            "approval.requested",
+            {
+                "approval_id": "a2",
+                "title": "edit src/app.py",
+                "arguments": {"path": "src/app.py", "old": "a = 1\n", "new": "a = 2\n"},
+            },
+        ),
+    )
+    shell = feed(
+        _running(),
+        event(
+            2,
+            "approval.requested",
+            {"approval_id": "a3", "arguments": {"argv": ["/bin/sh", "-c", "ls"]}},
+        ),
+    )
+
+    assert write.interaction is not None and write.interaction.snippets == (
+        Snippet("src/app.py", "", "print('hi')\n"),
+    )
+    assert change.interaction is not None
+    (diff,) = change.interaction.snippets
+    assert diff.language == "diff"
+    assert "-a = 1" in diff.text and "+a = 2" in diff.text
+    assert shell.interaction is not None and shell.interaction.snippets == ()
