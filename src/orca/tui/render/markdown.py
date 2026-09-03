@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import ClassVar, override
 
 from rich.console import Console, ConsoleOptions, RenderResult
@@ -90,12 +91,17 @@ class AnswerMarkdown(Markdown):
             yield from super().__rich_console__(console, options)
 
 
+@lru_cache(maxsize=64)
 def answer_markdown(source: str) -> Markdown:
     """Render canonical prose, repairing only unmistakably flattened block separators.
 
     Some structured-output providers preserve Markdown punctuation but flatten newlines in the
     JSON string. The durable answer remains untouched; this display projection inserts line
     boundaries only where multiple independent block signals make the intent unambiguous.
+
+    Memoised on the text: the turn a run is going in is rendered on every tick of the
+    clock for its spinner, and its answer is the same text between two deltas. A
+    `Markdown` holds its parse and renders as often as asked.
     """
 
     return AnswerMarkdown(recover_flattened_markdown(source))

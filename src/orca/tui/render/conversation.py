@@ -27,56 +27,80 @@ from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNIN
 
 
 def render_conversation(state: AppState, *, width: int) -> RenderableType:
+    """The whole transcript, as one renderable. The host renders a turn at a time with
+    `render_turn`; this is the same rows in one piece, for the plain output and for tests."""
     rows: list[RenderableType] = []
     if not state.turns:
         rows.extend(welcome(state, width=width))
-    for turn in state.turns:
-        rows.append(_request_block(turn.request or "Submitting…"))
-        if turn.plan and not _pinned(state, turn):
-            # Intent frames activity; the active step is the checklist's only prominent line.
-            # The active turn's plan is pinned above the composer instead, by `render_plan`.
-            rows.append(Padding(_plan_checklist(turn), (0, 1)))
-        by_id = {item.update_id: item for item in turn.progress}
-        pending: list[ProgressItem] = []
-        for segment in (*_timeline(turn), None):
-            if isinstance(segment, Activity):
-                if (item := by_id.get(segment.update_id)) is not None:
-                    pending.append(item)
-                continue
-            if pending:
-                # Consecutive rows share one table so their glyphs line up.
-                # A blank line either side: rows sit between paragraphs of the model's
-                # own words, and against them they read as part of the sentence.
-                # The group at the end of a working turn is what the agent is on now,
-                # between one call and the next: it shines like a running call does.
-                tail = segment is None and turn.run_id == state.active_run_id and state.working
-                rows.append(Padding(_activity_table(pending, state, live=tail), (1, 1)))
-                pending = []
-            if isinstance(segment, Narration):
-                rows.append(Padding(answer_markdown(segment.text), (0, 1)))
-            elif isinstance(segment, TurnNote):
-                rows.append(Padding(_note_row(segment), (0, 1)))
-        asked = state.interaction
-        if (
-            asked is not None
-            and asked.kind == "approval"
-            and turn.run_id == state.active_run_id
-            and (prompt := render_interaction(state, width=max(1, width - 2))) is not None
-        ):
-            # The prompt at the end of the turn it belongs to, where the person is reading,
-            # the way an editor's agent asks; its answer takes its place once decided.
-            rows.append(Padding(prompt, (1, 1, 0, 1)))
-        if turn.run_id == state.active_run_id and state.working:
-            rows.append(Padding(_working(state), (1, 1, 0, 1)))
-        for artifact in turn.artifacts:
-            label = artifact.reference or artifact.artifact_id
-            rows.append(
-                Padding(
-                    Text.assemble(("◇ ", ACCENT), (artifact.title, "bold"), (f"  {label}", MUTED)),
-                    (0, 1),
-                )
-            )
+    rows.extend(render_turn(state, turn, width=width) for turn in state.turns)
     return Group(*rows) if rows else Text("")
+
+
+def turn_key(state: AppState, turn: TurnState, *, width: int) -> tuple[object, ...] | None:
+    """What one turn's rendering depends on, for a host that keeps a turn's lines until
+    they would differ.
+
+    None for the turn a run is going in: its spinner, its shine and its answer move under
+    the clock and the stream, and it is one turn. Every other turn is a function of the
+    turn itself -- immutable, so identity is change -- and the little of the state it
+    reads. Measured 2026-09-03: a thirty-turn transcript took 210 ms to render, and the
+    host rendered it on every event and every tick of the clock, which is what typing
+    into the composer was waiting behind.
+    """
+    if turn.run_id == state.active_run_id and (state.working or state.interaction is not None):
+        return None
+    return (turn, state.tools_expanded, state.working, width)
+
+
+def render_turn(state: AppState, turn: TurnState, *, width: int) -> RenderableType:
+    """One turn: the request, then what happened, in order."""
+    rows: list[RenderableType] = []
+    rows.append(_request_block(turn.request or "Submitting…"))
+    if turn.plan and not _pinned(state, turn):
+        # Intent frames activity; the active step is the checklist's only prominent line.
+        # The active turn's plan is pinned above the composer instead, by `render_plan`.
+        rows.append(Padding(_plan_checklist(turn), (0, 1)))
+    by_id = {item.update_id: item for item in turn.progress}
+    pending: list[ProgressItem] = []
+    for segment in (*_timeline(turn), None):
+        if isinstance(segment, Activity):
+            if (item := by_id.get(segment.update_id)) is not None:
+                pending.append(item)
+            continue
+        if pending:
+            # Consecutive rows share one table so their glyphs line up.
+            # A blank line either side: rows sit between paragraphs of the model's
+            # own words, and against them they read as part of the sentence.
+            # The group at the end of a working turn is what the agent is on now,
+            # between one call and the next: it shines like a running call does.
+            tail = segment is None and turn.run_id == state.active_run_id and state.working
+            rows.append(Padding(_activity_table(pending, state, live=tail), (1, 1)))
+            pending = []
+        if isinstance(segment, Narration):
+            rows.append(Padding(answer_markdown(segment.text), (0, 1)))
+        elif isinstance(segment, TurnNote):
+            rows.append(Padding(_note_row(segment), (0, 1)))
+    asked = state.interaction
+    if (
+        asked is not None
+        and asked.kind == "approval"
+        and turn.run_id == state.active_run_id
+        and (prompt := render_interaction(state, width=max(1, width - 2))) is not None
+    ):
+        # The prompt at the end of the turn it belongs to, where the person is reading,
+        # the way an editor's agent asks; its answer takes its place once decided.
+        rows.append(Padding(prompt, (1, 1, 0, 1)))
+    if turn.run_id == state.active_run_id and state.working:
+        rows.append(Padding(_working(state), (1, 1, 0, 1)))
+    for artifact in turn.artifacts:
+        label = artifact.reference or artifact.artifact_id
+        rows.append(
+            Padding(
+                Text.assemble(("◇ ", ACCENT), (artifact.title, "bold"), (f"  {label}", MUTED)),
+                (0, 1),
+            )
+        )
+    return Group(*rows)
 
 
 def render_plan(state: AppState, *, width: int) -> RenderableType | None:
@@ -252,7 +276,7 @@ _KIND_GLYPHS = {
     "read": "≡",
     "search": "⌕",
     "edit": "✎",
-    "execute": "$",
+    "execute": "›_",
     "fetch": "◎",
     "think": "✦",
     "switch_mode": "⇄",

@@ -71,7 +71,7 @@ from orca.tui.render.theme import (
 )
 from orca.tui.screens import HelpScreen, ThreadPickerScreen
 from orca.tui.views import ConversationView, InspectorView, ReviewView
-from orca.tui.views.base import RenderedView
+from orca.tui.views.base import StateView
 from orca.tui.widgets import Composer
 
 #: The renderer's tokens, given to Textual as well, so everything it draws on its own --
@@ -318,6 +318,8 @@ class OrcaApp(App[None]):
         #: never because a keystroke had not reached the model yet: a render between the
         #: two used to put the model's stale draft back and the cursor at the start.
         self._reported_draft: str = ""
+        #: Whether a render is waiting for the loop to go idle; see `_render_soon`.
+        self._render_queued: bool = False
 
     @override
     def compose(self) -> ComposeResult:
@@ -385,12 +387,16 @@ class OrcaApp(App[None]):
     def apply_model_action(self, action: Action) -> None:
         transition = reduce(self.model, action)
         self.model = transition.state
-        if self._shell_ready and not isinstance(action, ComposerChanged):
-            self._render_model()
-        elif self._shell_ready:
+        if not self._shell_ready:
+            pass
+        elif isinstance(action, ComposerChanged):
             # Typing re-renders the menu alone; the rest of the shell has not changed.
             self._menu_index = 0
             self._render_menu()
+        elif isinstance(action, EventReceived | ClockTicked):
+            self._render_soon()
+        else:
+            self._render_model()
         for effect in transition.effects:
             self._perform(effect)
 
@@ -503,12 +509,29 @@ class OrcaApp(App[None]):
     async def action_quit(self) -> None:
         self.apply_model_action(CommandInvoked("quit"))
 
+    def _render_soon(self) -> None:
+        """Render once the loop is idle, however many events arrive first.
+
+        For what the backend and the clock send, not for what the person does: a person's
+        action is rendered as it happens. A stream that handed over fifty deltas in one
+        burst used to render the shell fifty times before the next keystroke could be
+        read; now the keystroke waits on one render, and the model is right throughout.
+        """
+        if self._render_queued:
+            return
+        self._render_queued = True
+        _ = self.call_after_refresh(self._render_queued_model)
+
+    def _render_queued_model(self) -> None:
+        self._render_queued = False
+        self._render_model()
+
     def _render_model(self) -> None:
         width = max(1, self.model.viewport_width)
         self.query_one("#app-header", Static).update(render_header(self.model, width=width))
         host = self.query_one("#view-host", ContentSwitcher)
         host.current = self.model.view.value
-        self.query_one(f"#{self.model.view.value}", RenderedView).update_state(self.model)
+        self.query_one(f"#{self.model.view.value}", StateView).update_state(self.model)
 
         self._render_menu()
         notice = self.query_one("#notice", Static)

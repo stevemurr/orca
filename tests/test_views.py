@@ -366,7 +366,7 @@ def test_each_kind_of_tool_has_its_own_quiet_glyph() -> None:
 
     assert "≡  read src/app.py" in rendered
     assert "✎  edit src/app.py" in rendered
-    assert "$  run: pytest" in rendered
+    assert "›_ run: pytest" in rendered
     assert "·  files__list" in rendered
 
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from typing import override
+from unittest.mock import patch
 
 from textual.widgets import ContentSwitcher, Static
 
-from orca.app.actions import EventReceived, RunAccepted
+from orca.app.actions import CommandInvoked, EventReceived, RunAccepted
 from orca.app.model import AppState, Choice, TaskEvent, ThreadReplay, ViewId
 from orca.backend import (
     BackendError,
@@ -506,6 +508,81 @@ async def test_naming_a_command_offers_the_values_the_backend_accepts() -> None:
         assert app.model.policy == "edits"
         assert "yolo" in app.model.notices[-1].message
         assert "full-access" in app.model.notices[-1].message
+
+
+async def test_a_turn_that_did_not_change_is_not_rendered_again() -> None:
+    """One widget per turn, and a settled turn keeps its lines: a tick of the clock renders
+    the turn the run is going in and nothing else. The whole transcript used to be one
+    widget, rendered on every tick, and typing waited behind it."""
+    from orca.app.model import Narration, ProgressItem, RunStatus, TurnState
+    from orca.tui.render.conversation import render_turn as real
+    from orca.tui.views import conversation as view_module
+    from orca.tui.views.conversation import ConversationView
+
+    rendered: list[str] = []
+
+    def counting(state: AppState, turn: TurnState, *, width: int) -> object:
+        rendered.append(turn.run_id)
+        return real(state, turn, width=width)
+
+    settled = TurnState("run-1", request="first", answer="done", status="completed")
+    live = TurnState(
+        "run-2",
+        request="second",
+        progress=(ProgressItem("t", "Reading", "active", kind="read"),),
+        timeline=(Narration("Looking."),),
+    )
+    state = AppState(
+        booting=False,
+        connected=True,
+        turns=(settled, live),
+        active_run_id="run-2",
+        run_status=RunStatus.RUNNING,
+        clock=1.0,
+    )
+    app = OrcaApp(FakeBackend())
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        view = app.query_one(ConversationView)
+        with patch.object(view_module, "render_turn", counting):
+            view.update_state(state)
+            await pilot.pause()
+            assert rendered == ["run-1", "run-2"]
+
+            view.update_state(replace(state, clock=2.0))
+            await pilot.pause()
+            assert rendered == ["run-1", "run-2", "run-2"]
+
+            # Folding or unfolding the tool rows is a change to every turn.
+            view.update_state(replace(state, clock=3.0, tools_expanded=True))
+            await pilot.pause()
+            assert rendered[-2:] == ["run-1", "run-2"]
+
+
+async def test_a_burst_of_events_is_rendered_once() -> None:
+    """What the backend sends is rendered when the loop is idle, however many events
+    arrived; what the person does is rendered as it happens."""
+    app = OrcaApp(FakeBackend())
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        renders: list[int] = []
+        with patch.object(app, "_render_model", side_effect=lambda: renders.append(1)):
+            for sequence in range(1, 6):
+                app.apply_model_action(
+                    EventReceived(
+                        event(
+                            sequence,
+                            "run.progress",
+                            {"update_id": f"s{sequence}", "text": "step", "status": "active"},
+                        )
+                    )
+                )
+            assert renders == []
+            await pilot.pause()
+            assert renders == [1]
+
+            app.apply_model_action(CommandInvoked("status"))
+            assert renders == [1, 1]
 
 
 async def test_a_render_between_a_keystroke_and_its_notice_keeps_the_text() -> None:
