@@ -16,9 +16,10 @@ from orca.app.actions import (
 from orca.app.commands import ParsedCommand, parse_input
 from orca.app.model import AppState, RunStatus, TaskEvent, ThreadReplay, ViewId
 from orca.app.update import FollowRun, LoadThread, reduce
+from orca.json_types import JsonObject
 
 
-def event(sequence: int, kind: str, payload: dict[str, object]) -> TaskEvent:
+def event(sequence: int, kind: str, payload: JsonObject) -> TaskEvent:
     return TaskEvent(
         sequence=sequence,
         event_id=f"evt-{sequence}",

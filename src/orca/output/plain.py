@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Mapping
 from contextlib import aclosing
-from typing import Any, BinaryIO, TextIO
+from typing import BinaryIO, TextIO
 
 import orjson
 
@@ -13,6 +13,7 @@ from orca.app.actions import Connected, EventReceived, RunAccepted
 from orca.app.model import AppState
 from orca.app.update import reduce
 from orca.backend import RunRequest, TerminalBackend
+from orca.json_types import JsonObject
 
 
 async def run_once(
@@ -122,7 +123,7 @@ async def run_once(
     return 2 if input_required else 0
 
 
-def _newly_active_steps(payload: Mapping[str, Any], announced: set[str]) -> list[str]:
+def _newly_active_steps(payload: JsonObject, announced: set[str]) -> list[str]:
     """Steps that have just become `in_progress`, in the order the plan lists them.
 
     Counts nothing and enforces nothing: the server states "at most one in progress" and does not

@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner
@@ -68,7 +69,7 @@ def test_server_commands_start_inspect_and_stop_one_background_process(
 ) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+        port = cast(int, listener.getsockname()[1])
     endpoint = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("ORCA_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("ORCA_AUTH_TOKEN", "managed-test-token")

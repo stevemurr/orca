@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, Literal
+from typing import Literal, cast
 
 import typer
 from rich.console import Console
@@ -231,14 +232,14 @@ def _server_action(ctx: typer.Context, action: ServerAction) -> None:
 
 
 def _options(ctx: typer.Context) -> GlobalOptions:
-    root_context = ctx.find_root()
-    if isinstance(root_context.obj, GlobalOptions):
-        return root_context.obj
+    root_object = cast(object, ctx.find_root().obj)
+    if isinstance(root_object, GlobalOptions):
+        return root_object
     selection = current_connection_selection()
     return GlobalOptions(selection.profile, selection.url)
 
 
-def _run(awaitable: Any) -> Any:
+def _run[T](awaitable: Coroutine[object, object, T]) -> T:
     try:
         return asyncio.run(awaitable)
     except (

@@ -8,12 +8,14 @@ second implementation would also be unable to do.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Self, cast
 
 import httpx
 import orjson
+
+from orca.json_types import JsonObject, JsonValue
 
 API_PREFIX = "/api/v1"
 
@@ -40,7 +42,7 @@ _REASONS_THAT_END_THE_RUN = frozenset({"terminal", "terminal_without_event"})
 class SSEEvent:
     id: str | None
     event: str
-    data: dict[str, Any]
+    data: JsonObject
 
 
 def stream_end_reason(event: SSEEvent) -> str | None:
@@ -54,7 +56,7 @@ def stream_end_reason(event: SSEEvent) -> str | None:
     if event.event != "stream.end":
         return None
     payload = event.data.get("payload")
-    if isinstance(payload, dict) and payload.get("reason"):
+    if isinstance(payload, Mapping) and payload.get("reason"):
         return str(payload["reason"])
     reason = event.data.get("reason")
     return str(reason) if reason else None
@@ -78,14 +80,14 @@ def _error_for(resp: httpx.Response) -> ApiError:
     proxy or gateway in front of the server may return HTML. Transport failures must remain
     legible without inventing a second protocol interpretation. (found 2026-08-17)
     """
-    detail: Any = None
+    detail: JsonValue = None
     try:
-        body = resp.json() if resp.content else {}
-        detail = body.get("detail") if isinstance(body, dict) else body
-    except ValueError:
+        body = _decoded(resp)
+        detail = body.get("detail") if isinstance(body, Mapping) else body
+    except ApiError:
         detail = None
 
-    if isinstance(detail, dict):
+    if isinstance(detail, Mapping):
         return ApiError(
             resp.status_code,
             str(detail.get("code", "error")),
@@ -97,6 +99,30 @@ def _error_for(resp: httpx.Response) -> ApiError:
         code = "not_found" if resp.status_code == 404 else "error"
         return ApiError(resp.status_code, code, detail)
     return ApiError(resp.status_code, "error", resp.text[:200] or resp.reason_phrase)
+
+
+def _decoded(resp: httpx.Response) -> JsonValue:
+    """The body as JSON, or a legible error when a successful response is not JSON at all."""
+    if not resp.content:
+        return None
+    try:
+        # `Response.json()` is typed `Any`; this is where the wire becomes something readable.
+        return cast(JsonValue, resp.json())
+    except ValueError as exc:
+        raise _malformed(resp, "JSON") from exc
+
+
+def _malformed(resp: httpx.Response, expected: str) -> ApiError:
+    request = resp.request
+    return ApiError(
+        resp.status_code,
+        "malformed_response",
+        f"{request.method} {request.url.path} did not return {expected}.",
+    )
+
+
+#: What may go in a query string. httpx flattens these itself; nested JSON has no meaning there.
+QueryParams = Mapping[str, str | int | None]
 
 
 class HttpApiClient:
@@ -115,9 +141,19 @@ class HttpApiClient:
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
-    async def _request(self, method: str, path: str, **kw: Any) -> Any:
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: JsonValue = None,
+        params: QueryParams | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
         try:
-            resp = await self._client.request(method, f"{self._base}{path}", **kw)
+            resp = await self._client.request(
+                method, f"{self._base}{path}", json=json, params=params, headers=headers
+            )
         except httpx.TimeoutException as exc:
             raise ApiError(
                 0,
@@ -132,9 +168,44 @@ class HttpApiClient:
             ) from exc
         if resp.status_code >= 400:
             raise _error_for(resp)
-        return resp.json() if resp.content else None
+        return resp
 
-    async def _idempotent_post(self, path: str, **kw: Any) -> Any:
+    async def _object(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: JsonValue = None,
+        params: QueryParams | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> JsonObject:
+        """One request whose reply the contract says is a JSON object."""
+        resp = await self._send(method, path, json=json, params=params, headers=headers)
+        body = _decoded(resp)
+        if not isinstance(body, Mapping):
+            raise _malformed(resp, "a JSON object")
+        return body
+
+    async def _objects(self, method: str, path: str) -> list[JsonObject]:
+        """One request whose reply the contract says is a JSON array of objects."""
+        resp = await self._send(method, path)
+        body = _decoded(resp)
+        if not isinstance(body, list):
+            raise _malformed(resp, "a JSON array")
+        rows: list[JsonObject] = []
+        for row in body:
+            if not isinstance(row, Mapping):
+                raise _malformed(resp, "a JSON array of objects")
+            rows.append(row)
+        return rows
+
+    async def _idempotent_post(
+        self,
+        path: str,
+        *,
+        json: JsonValue,
+        headers: Mapping[str, str] | None = None,
+    ) -> JsonObject:
         """Retry one safely identified POST without minting a second operation.
 
         A connection can disappear after the server commits but before the response reaches the
@@ -145,7 +216,7 @@ class HttpApiClient:
 
         for attempt in range(_IDEMPOTENT_POST_ATTEMPTS):
             try:
-                return await self._request("POST", path, **kw)
+                return await self._object("POST", path, json=json, headers=headers)
             except ApiError as exc:
                 retryable = exc.status == 0 and exc.code in {
                     "server_timeout",
@@ -162,11 +233,11 @@ class HttpApiClient:
         self,
         name: str,
         root_path: str,
-        config: dict[str, Any] | None = None,
+        config: JsonObject | None = None,
         vcs: str | None = None,
         replace_existing: bool = False,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"name": name, "root_path": root_path}
+    ) -> JsonObject:
+        body: dict[str, JsonValue] = {"name": name, "root_path": root_path}
         if config is not None:
             body["config"] = config
         if vcs is not None:
@@ -175,17 +246,15 @@ class HttpApiClient:
             body["vcs"] = vcs
         if replace_existing:
             body["replace_existing"] = True
-        return await self._request("POST", "/workspaces", json=body)
+        return await self._object("POST", "/workspaces", json=body)
 
-    async def list_workspaces(self) -> list[dict[str, Any]]:
-        return await self._request("GET", "/workspaces")
+    async def list_workspaces(self) -> list[JsonObject]:
+        return await self._objects("GET", "/workspaces")
 
     # -- threads and runs ----------------------------------------------------------------
 
-    async def create_thread(
-        self, workspace_id: str | None = None, title: str = ""
-    ) -> dict[str, Any]:
-        return await self._request(
+    async def create_thread(self, workspace_id: str | None = None, title: str = "") -> JsonObject:
+        return await self._object(
             "POST", "/threads", json={"workspace_id": workspace_id, "title": title}
         )
 
@@ -197,9 +266,9 @@ class HttpApiClient:
         *,
         mode: str | None = None,
         approval_policy: str | None = None,
-        client_context: dict[str, Any] | None = None,
+        client_context: JsonObject | None = None,
         idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """Start a run.
 
         Every optional field here is one orca's own surface can express. The contract permits a
@@ -210,7 +279,7 @@ class HttpApiClient:
         # Omitted rather than sent as null when there is none: the field is optional, and a
         # run with no workspace is how this client works in a directory that is not a
         # repository.
-        body: dict[str, Any] = {"message": {"content": message}}
+        body: dict[str, JsonValue] = {"message": {"content": message}}
         if workspace_id:
             body["workspace_id"] = workspace_id
         if mode:
@@ -222,30 +291,26 @@ class HttpApiClient:
         path = f"/threads/{thread_id}/runs"
         if idempotency_key:
             return await self._idempotent_post(path, json=body, headers=headers)
-        return await self._request("POST", path, json=body, headers=headers)
+        return await self._object("POST", path, json=body, headers=headers)
 
-    async def list_runs(self, **params: Any) -> dict[str, Any]:
-        return await self._request(
-            "GET", "/runs", params={k: v for k, v in params.items() if v is not None}
-        )
+    async def list_runs(self, **params: str | int | None) -> JsonObject:
+        return await self._object("GET", "/runs", params=_present(params))
 
-    async def get_thread(self, thread_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/threads/{thread_id}")
+    async def get_thread(self, thread_id: str) -> JsonObject:
+        return await self._object("GET", f"/threads/{thread_id}")
 
-    async def list_threads(self, **params: Any) -> dict[str, Any]:
-        return await self._request(
-            "GET", "/threads", params={k: v for k, v in params.items() if v is not None}
-        )
+    async def list_threads(self, **params: str | int | None) -> JsonObject:
+        return await self._object("GET", "/threads", params=_present(params))
 
-    async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]:
+    async def send_command(self, run_id: str, command: JsonObject) -> JsonObject:
         if command.get("command_id"):
             return await self._idempotent_post(f"/runs/{run_id}/commands", json=command)
-        return await self._request("POST", f"/runs/{run_id}/commands", json=command)
+        return await self._object("POST", f"/runs/{run_id}/commands", json=command)
 
     # -- discovery ---------------------------------------------------------------------
 
-    async def capabilities(self) -> dict[str, Any]:
-        return await self._request("GET", "/capabilities")
+    async def capabilities(self) -> JsonObject:
+        return await self._object("GET", "/capabilities")
 
     # -- events ----------------------------------------------------------------------------
 
@@ -335,10 +400,15 @@ class HttpApiClient:
                     0,
                     "stream_unreachable",
                     f"Lost the event stream for {run_id} and could not get it back after "
-                    f"{_RECONNECT_ATTEMPTS} attempts. The run may still be going; it can be "
-                    f"followed again from seq {cursor} once the backend is reachable.",
+                    + f"{_RECONNECT_ATTEMPTS} attempts. The run may still be going; it can be "
+                    + f"followed again from seq {cursor} once the backend is reachable.",
                 )
             await _pause_before_reconnect(attempt)
+
+
+def _present(params: Mapping[str, str | int | None]) -> QueryParams:
+    """Only the query parameters a caller actually set."""
+    return {key: value for key, value in params.items() if value is not None}
 
 
 async def _pause_before_reconnect(attempt: int) -> None:
@@ -348,7 +418,7 @@ async def _pause_before_reconnect(attempt: int) -> None:
     delay, so a server that closes the stream immediately after every event cannot be turned
     back into the hot loop this replaces.
     """
-    await asyncio.sleep(min(_RECONNECT_CAP_S, _RECONNECT_BASE_S * 2 ** (attempt - 1)))
+    await asyncio.sleep(min(_RECONNECT_CAP_S, _RECONNECT_BASE_S * 2.0 ** (attempt - 1)))
 
 
 class _SSEParser:
@@ -370,9 +440,10 @@ class _SSEParser:
         if line == "":
             if not self._data:
                 return []
-            event = SSEEvent(
-                id=self._id, event=self._event, data=orjson.loads("\n".join(self._data))
-            )
+            decoded = cast(JsonValue, orjson.loads("\n".join(self._data)))
+            if not isinstance(decoded, Mapping):
+                raise ApiError(0, "malformed_frame", "an event frame's data is not a JSON object")
+            event = SSEEvent(id=self._id, event=self._event, data=decoded)
             self._id, self._event, self._data = None, "message", []
             return [event]
         field, _, value = line.partition(":")

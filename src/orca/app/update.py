@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Any
 
 from orca.app.actions import (
     Action,
@@ -49,6 +48,7 @@ from orca.backend import (
     Resume,
     Steer,
 )
+from orca.json_types import JsonObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,9 +302,7 @@ def reduce(state: AppState, action: Action) -> Transition:
             ),
         )
     if isinstance(action, CommandCompleted):
-        return Transition(
-            _notice(state, f"{action.command}: {action.outcome.status or 'sent'}")
-        )
+        return Transition(_notice(state, f"{action.command}: {action.outcome.status or 'sent'}"))
     raise TypeError(f"unsupported action: {type(action).__name__}")
 
 
@@ -418,7 +416,7 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             status=_string(payload, "status") or "active",
         )
         turn = _latest_turn(state)
-        progress = _upsert_by(turn.progress, item, "update_id")
+        progress = _upsert_by(turn.progress, item, lambda entry: entry.update_id)
         state = _replace_latest_turn(state, replace(turn, progress=progress, status="running"))
         return Transition(state)
 
@@ -451,9 +449,7 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         return Transition(
             _replace_latest_turn(
                 state,
-                replace(
-                    turn, plan=steps, plan_explanation=_string(payload, "explanation").strip()
-                ),
+                replace(turn, plan=steps, plan_explanation=_string(payload, "explanation").strip()),
             )
         )
 
@@ -470,7 +466,11 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
         return Transition(
             _replace_latest_turn(
-                state, replace(turn, artifacts=_upsert_by(turn.artifacts, offer, "artifact_id"))
+                state,
+                replace(
+                    turn,
+                    artifacts=_upsert_by(turn.artifacts, offer, lambda entry: entry.artifact_id),
+                ),
             )
         )
 
@@ -481,8 +481,10 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         command = ""
         if isinstance(arguments, Mapping):
             argv = arguments.get("argv")
-            if isinstance(argv, list) and all(isinstance(item, str) for item in argv):
-                command = shlex.join(argv)
+            if isinstance(argv, list):
+                words = [item for item in argv if isinstance(item, str)]
+                if len(words) == len(argv):
+                    command = shlex.join(words)
         interaction = InteractionState(
             kind="approval",
             request_id=_string(payload, "approval_id") or event.event_id,
@@ -568,10 +570,10 @@ def _replace_latest_turn(state: AppState, turn: TurnState) -> AppState:
     return replace(state, turns=(*state.turns[:-1], turn))
 
 
-def _upsert_by(values: tuple[Any, ...], value: Any, field: str) -> tuple[Any, ...]:
-    identity = getattr(value, field)
+def _upsert_by[T](values: tuple[T, ...], value: T, key: Callable[[T], object]) -> tuple[T, ...]:
+    identity = key(value)
     for index, current in enumerate(values):
-        if getattr(current, field) == identity:
+        if key(current) == identity:
             return (*values[:index], value, *values[index + 1 :])
     return (*values, value)
 
@@ -588,6 +590,6 @@ def _notice(state: AppState, message: str, level: NoticeLevel = "info") -> AppSt
     return replace(state, notices=notices)
 
 
-def _string(payload: Mapping[str, Any], key: str) -> str:
+def _string(payload: JsonObject, key: str) -> str:
     value = payload.get(key)
     return value if isinstance(value, str) else ""

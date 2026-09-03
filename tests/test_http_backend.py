@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -12,6 +11,7 @@ from orca.backend import BackendError, CommandOutcome, Pause, RunRequest
 from orca.client import ApiError, SSEEvent
 from orca.connection import Connection, CredentialSource
 from orca.http_backend import HttpBackend, normalize_event
+from orca.json_types import JsonObject
 from orca.workspace_context import WorkspaceBinding
 
 
@@ -22,24 +22,33 @@ class FakeClient:
         self.commands: list[dict[str, object]] = []
         self.closed = False
 
-    async def capabilities(self) -> dict[str, Any]:
+    async def capabilities(self) -> JsonObject:
         return {"protocol_version": "1.6"}
 
-    async def create_thread(
-        self, workspace_id: str | None = None, title: str = ""
-    ) -> dict[str, Any]:
+    async def create_thread(self, workspace_id: str | None = None, title: str = "") -> JsonObject:
         self.created_threads.append({"workspace_id": workspace_id, "title": title})
         return {"thread_id": "thread-1"}
 
     async def create_run(
-        self, thread_id: str, workspace_id: str | None, message: str, **kwargs: Any
-    ) -> dict[str, Any]:
+        self,
+        thread_id: str,
+        workspace_id: str | None,
+        message: str,
+        *,
+        mode: str | None = None,
+        approval_policy: str | None = None,
+        client_context: JsonObject | None = None,
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
         self.created_runs.append(
             {
                 "thread_id": thread_id,
                 "workspace_id": workspace_id,
                 "message": message,
-                **kwargs,
+                "mode": mode,
+                "approval_policy": approval_policy,
+                "client_context": client_context,
+                "idempotency_key": idempotency_key,
             }
         )
         return {"run_id": "run-1", "thread_id": thread_id}
@@ -60,22 +69,22 @@ class FakeClient:
         )
         yield SSEEvent("1", "stream.end", {"reason": "terminal", "final_seq": 1})
 
-    async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]:
+    async def send_command(self, run_id: str, command: JsonObject) -> JsonObject:
         self.commands.append({"run_id": run_id, **command})
         return {"status": "accepted"}
 
-    async def list_threads(self, **kwargs: Any) -> dict[str, Any]:
+    async def list_threads(self, **kwargs: str | int | None) -> JsonObject:
         del kwargs
         return {"threads": [{"thread_id": "thread-1", "title": "hello"}]}
 
-    async def get_thread(self, thread_id: str) -> dict[str, Any]:
+    async def get_thread(self, thread_id: str) -> JsonObject:
         return {
             "thread_id": thread_id,
             "workspace_id": "ws-1",
             "title": "hello",
         }
 
-    async def list_runs(self, **kwargs: Any) -> dict[str, Any]:
+    async def list_runs(self, **kwargs: str | int | None) -> JsonObject:
         assert kwargs == {"thread_id": "thread-1", "limit": 50}
         return {
             "runs": [
@@ -212,7 +221,7 @@ async def test_a_server_that_is_not_a_harness_says_so() -> None:
     """
 
     class NotAHarness(FakeClient):
-        async def capabilities(self) -> dict[str, Any]:
+        async def capabilities(self) -> JsonObject:
             raise ApiError(404, "not_found", "Not Found")
 
     backend = HttpBackend(

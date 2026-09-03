@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, cast
 from urllib.parse import SplitResult, urlsplit, urlunsplit
+
+from orca.json_types import JsonObject
 
 #: Where a harness listens by default, so `orca` with no configuration reaches one.
 #:
@@ -149,7 +151,7 @@ class KeyringCredentialStore:
         except ImportError as exc:
             raise CredentialBackendUnavailable(
                 "the system credential backend is unavailable; install keyring or use "
-                f"{TOKEN_ENV}, {TOKEN_FILE_ENV}, or --token-stdin"
+                + f"{TOKEN_ENV}, {TOKEN_FILE_ENV}, or --token-stdin"
             ) from exc
         try:
             backend = keyring.get_keyring()
@@ -161,7 +163,7 @@ class KeyringCredentialStore:
         if priority <= 0:
             raise CredentialBackendUnavailable(
                 "no system credential backend is available; use an explicit environment, "
-                "token-file, or stdin credential in this environment"
+                + "token-file, or stdin credential in this environment"
             )
         return keyring
 
@@ -238,16 +240,14 @@ class ConfigRepository:
         if not self.path.exists():
             return ClientConfig()
         try:
-            raw = tomllib.loads(self.path.read_text(encoding="utf-8"))
+            raw = cast(JsonObject, tomllib.loads(self.path.read_text(encoding="utf-8")))
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
             raise ConnectionConfigError(f"could not read client config at {self.path}") from exc
-        if not isinstance(raw, dict):
-            raise ConnectionConfigError("client config must be a TOML table")
         unknown_top_level = set(raw) - {"version", "active_profile", "profiles"}
         if unknown_top_level:
             raise ConnectionConfigError(
                 "client config has unsupported fields; credentials must not be stored in "
-                "config.toml"
+                + "config.toml"
             )
         if raw.get("version", 1) != 1:
             raise ConnectionConfigError("unsupported client config version")
@@ -267,7 +267,7 @@ class ConfigRepository:
             if unknown:
                 raise ConnectionConfigError(
                     f"profile {name!r} has unsupported fields; credentials must not be stored "
-                    "in config.toml"
+                    + "in config.toml"
                 )
             url = value.get("url")
             if not isinstance(url, str) or not url.strip():
@@ -535,7 +535,7 @@ def resolve_connection(
     ):
         raise InsecureEndpointError(
             f"refusing to send the {source.value} credential to {endpoint} in the clear. "
-            f"Use HTTPS, or set {ALLOW_INSECURE_HTTP_ENV}=true to accept the risk."
+            + f"Use HTTPS, or set {ALLOW_INSECURE_HTTP_ENV}=true to accept the risk."
         )
 
     return Connection(

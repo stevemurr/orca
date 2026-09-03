@@ -14,26 +14,26 @@ _FLAT_ORDERED_ITEM = re.compile(r"\d{1,3}\.[ \t]+\S")
 _FLAT_BULLET_ITEM = re.compile(r"[-*+][ \t]+\S")
 _FLAT_OPENING_BODY = re.compile(
     r"\A(#{1,6}[ \t]+[^\n]*?`[^`\n]+`[^\n]*?)"
-    r"(?=`[^`\n]+`[ \t]+"
-    r"(?:is|are|was|were|provides?|implements?|serves?|uses?|contains?|offers?|supports?)\b)",
+    + r"(?=`[^`\n]+`[ \t]+"
+    + r"(?:is|are|was|were|provides?|implements?|serves?|uses?|contains?|offers?|supports?)\b)",
     re.IGNORECASE,
 )
 _FLAT_HEADING_PARAGRAPH = re.compile(
     r"^(#{1,6}[ \t]+(?:"
-    r"Overview|Summary|Introduction|Background|Context|Conclusion|"
-    r"Results|Result|Discussion|Details|Description|Purpose|"
-    r"Recommendations|Recommendation|Observations|Observation"
-    r"))(?=[A-Z0-9`\[])",
+    + r"Overview|Summary|Introduction|Background|Context|Conclusion|"
+    + r"Results|Result|Discussion|Details|Description|Purpose|"
+    + r"Recommendations|Recommendation|Observations|Observation"
+    + r"))(?=[A-Z0-9`\[])",
     re.MULTILINE,
 )
 _FLAT_HEADING_BLOCK = re.compile(
     r"^(#{1,6}[ \t]+[^\n]{1,120}?)"
-    r"(?=(?:"
-    r"\d{1,3}\.[ \t]+\S"
-    r"|[-*+][ \t]+\S"
-    r"|>[ \t]+\S"
-    r"|\|[ \t]*[^|\n]+[ \t]*\|"
-    r"))",
+    + r"(?=(?:"
+    + r"\d{1,3}\.[ \t]+\S"
+    + r"|[-*+][ \t]+\S"
+    + r"|>[ \t]+\S"
+    + r"|\|[ \t]*[^|\n]+[ \t]*\|"
+    + r"))",
     re.MULTILINE,
 )
 _FLAT_ORDERED_BOUNDARY = re.compile(r"(?<=[.!?])[ \t]?(?=\d{1,3}\.[ \t]+\S)")

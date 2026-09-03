@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
 from io import StringIO
+from typing import cast
 
 import orjson
 
 from orca.app.model import TaskEvent
 from orca.backend import RunInfo, RunRequest
+from orca.json_types import JsonObject
 from orca.output.plain import run_once
 from tests.support.backends import ScriptedBackend
 
@@ -68,7 +70,7 @@ async def test_jsonl_is_versioned_and_keeps_wire_facts_structured() -> None:
         jsonl=True,
     )
 
-    rows = [orjson.loads(line) for line in output.getvalue().splitlines()]
+    rows = [cast(JsonObject, orjson.loads(line)) for line in output.getvalue().splitlines()]
     assert rows[0] == {
         "version": 1,
         "type": "run.accepted",
@@ -148,6 +150,4 @@ async def test_plain_run_announces_a_step_when_it_starts_and_only_then() -> None
     )
 
     assert code == 0
-    assert output.getvalue() == (
-        "▸ read the router\n▸ add the handler\nAdded the handler.\n"
-    )
+    assert output.getvalue() == ("▸ read the router\n▸ add the handler\nAdded the handler.\n")

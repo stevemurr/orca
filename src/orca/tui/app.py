@@ -436,9 +436,7 @@ class OrcaApp(App[None]):
                 self.screen.allow_retry()
             self.apply_model_action(OperationFailed(str(exc)))
             return
-        self.apply_model_action(
-            CommandCompleted(type(effect.command).__name__.lower(), outcome)
-        )
+        self.apply_model_action(CommandCompleted(type(effect.command).__name__.lower(), outcome))
 
     async def _switch_workspace(self, selector: str) -> None:
         try:

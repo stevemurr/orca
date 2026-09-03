@@ -9,11 +9,13 @@ prettier path than the one attached to the run.
 from __future__ import annotations
 
 import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from orca.client import ApiError
+from orca.json_types import JsonObject
 from orca.process import ProcessError, ProcessSpec, run_process
 
 
@@ -22,16 +24,16 @@ class WorkspaceContextError(ValueError):
 
 
 class WorkspaceClient(Protocol):
-    async def list_workspaces(self) -> list[dict[str, Any]]: ...
+    async def list_workspaces(self) -> Sequence[JsonObject]: ...
 
     async def create_workspace(
         self,
         name: str,
         root_path: str,
-        config: dict[str, Any] | None = None,
+        config: JsonObject | None = None,
         vcs: str | None = None,
         replace_existing: bool = False,
-    ) -> dict[str, Any]: ...
+    ) -> JsonObject: ...
 
 
 @dataclass(frozen=True)
@@ -235,7 +237,7 @@ async def resolve_workspace_binding(
 
 async def _reuse_or_replace_exact_binding(
     client: WorkspaceClient,
-    workspace: dict[str, Any],
+    workspace: JsonObject,
     local: LocalWorkspace,
 ) -> WorkspaceBinding:
     """Reuse an exact registration only while it still describes the local contents.
@@ -269,7 +271,7 @@ async def _reuse_or_replace_exact_binding(
 
 
 def _binding_from_record(
-    workspace: dict[str, Any], *, local: LocalWorkspace | None = None
+    workspace: JsonObject, *, local: LocalWorkspace | None = None
 ) -> WorkspaceBinding:
     root = Path(str(workspace["root_path"])).expanduser().resolve()
     context = local or LocalWorkspace(

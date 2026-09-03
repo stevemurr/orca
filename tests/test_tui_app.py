@@ -19,12 +19,13 @@ from orca.backend import (
     ThreadHistoryInfo,
     ThreadSummary,
 )
+from orca.json_types import JsonObject
 from orca.tui.app import OrcaApp
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
 from orca.tui.widgets import Composer
 
 
-def event(sequence: int, kind: str, payload: dict[str, object]) -> TaskEvent:
+def event(sequence: int, kind: str, payload: JsonObject) -> TaskEvent:
     return TaskEvent(sequence, f"evt-{sequence}", kind, "user", payload)
 
 
@@ -198,9 +199,7 @@ async def test_approval_shortcuts_dispatch_typed_command() -> None:
         await pilot.press("1")
         await pilot.pause()
 
-        assert backend.commands == [
-            ("run-1", ResolveApproval("approval-1", "approve"))
-        ]
+        assert backend.commands == [("run-1", ResolveApproval("approval-1", "approve"))]
 
 
 async def test_failed_approval_command_can_be_retried_in_the_same_modal() -> None:
@@ -229,9 +228,7 @@ async def test_failed_approval_command_can_be_retried_in_the_same_modal() -> Non
         await pilot.press("1")
         await pilot.pause()
 
-        assert backend.commands == [
-            ("run-1", ResolveApproval("approval-1", "approve"))
-        ]
+        assert backend.commands == [("run-1", ResolveApproval("approval-1", "approve"))]
 
 
 async def test_a_view_switch_does_not_steal_focus_from_the_composer() -> None:

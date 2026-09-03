@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Self, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -34,6 +34,7 @@ from orca.connection import (
     URL_ENV,
     Connection,
 )
+from orca.json_types import JsonValue
 from orca.process import (
     DetachedProcess,
     process_exists,
@@ -230,7 +231,7 @@ class LocalServerManager:
             if server_command() is None:
                 raise ManagedServerError(
                     f"set {SERVER_COMMAND_ENV} to the command that starts your backend before "
-                    "asking orca to manage it"
+                    + "asking orca to manage it"
                 )
             raise ManagedServerError(
                 "only the default local http://localhost profile can be process-managed"
@@ -250,23 +251,26 @@ class LocalServerManager:
         if response.status_code != 200:
             return _Probe(status_code=response.status_code)
         try:
-            body = response.json()
+            body = cast(JsonValue, response.json())
         except ValueError:
             return _Probe(status_code=response.status_code)
-        detail = body.get("detail", {}) if isinstance(body, dict) else {}
+        if not isinstance(body, Mapping):
+            return _Probe(status_code=response.status_code)
+        detail = body.get("detail")
         return _Probe(
             status_code=response.status_code,
-            health=str(body.get("status")) if isinstance(body, dict) else None,
+            health=str(body.get("status")),
             instance_id=str(detail.get("managed_instance_id", ""))
-            if isinstance(detail, dict)
+            if isinstance(detail, Mapping)
             else "",
         )
 
     def _read_receipt(self) -> _Receipt | None:
         try:
-            return _Receipt.from_json(json.loads(self.state_path.read_text(encoding="utf-8")))
+            recorded = cast(object, json.loads(self.state_path.read_text(encoding="utf-8")))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
+        return _Receipt.from_json(recorded)
 
     def _write_receipt(self, receipt: _Receipt) -> None:
         self.runtime.mkdir(parents=True, exist_ok=True)
@@ -353,7 +357,7 @@ class LocalServerManager:
             if argv is None:
                 raise ManagedServerError(
                     f"set {SERVER_COMMAND_ENV} to the command that starts your backend before "
-                    "asking orca to manage it"
+                    + "asking orca to manage it"
                 )
             # `ORCA_*` is the whole forwarding rule: the child gets a constructed environment,
             # so a backend reads its own configuration from variables an operator deliberately
@@ -427,7 +431,7 @@ class LocalServerManager:
                     return ManagedServerStatus(self.connection.endpoint, False, False)
                 raise ManagedServerError(
                     "the recorded server is unreachable, so its ownership cannot be verified; "
-                    f"inspect {self.log_path}"
+                    + f"inspect {self.log_path}"
                 )
             if probe.instance_id != receipt.instance_id:
                 raise ManagedServerError(

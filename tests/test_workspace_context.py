@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 import pytest
 
+from orca.json_types import JsonObject, JsonValue
 from orca.workspace_context import (
     LocalWorkspace,
     WorkspaceContextError,
@@ -19,27 +19,27 @@ from tests.conftest import git
 class _RecordingWorkspaceClient:
     """A small API double that preserves the contract's replace-in-place semantics."""
 
-    def __init__(self, workspaces: list[dict[str, Any]] | None = None) -> None:
-        self.workspaces: list[dict[str, Any]] = list(workspaces or [])
-        self.creations: list[dict[str, Any]] = []
+    def __init__(self, workspaces: list[JsonObject] | None = None) -> None:
+        self.workspaces: list[JsonObject] = list(workspaces or [])
+        self.creations: list[JsonObject] = []
 
-    async def list_workspaces(self) -> list[dict[str, Any]]:
+    async def list_workspaces(self) -> list[JsonObject]:
         return list(self.workspaces)
 
     async def create_workspace(
         self,
         name: str,
         root_path: str,
-        config: dict[str, Any] | None = None,
+        config: JsonObject | None = None,
         vcs: str | None = None,
         replace_existing: bool = False,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         root = Path(root_path).resolve()
         existing = next(
             (
                 workspace
                 for workspace in self.workspaces
-                if Path(workspace["root_path"]).resolve() == root
+                if Path(str(workspace["root_path"])).resolve() == root
             ),
             None,
         )
@@ -52,7 +52,7 @@ class _RecordingWorkspaceClient:
         }
         self.creations.append(call)
         identity = git(root, "rev-list", "--max-parents=0", "HEAD") if vcs == "git" else None
-        created: dict[str, Any] = {
+        created: dict[str, JsonValue] = {
             "workspace_id": (
                 existing["workspace_id"]
                 if existing is not None and replace_existing
@@ -147,7 +147,7 @@ def test_resolver_registers_the_exact_discovered_root_instead_of_using_an_ancest
 
     class _Client:
         def __init__(self) -> None:
-            self.workspaces: list[dict[str, Any]] = [
+            self.workspaces: list[JsonObject] = [
                 {
                     "workspace_id": "ws_outer",
                     "name": "outer",
@@ -156,19 +156,19 @@ def test_resolver_registers_the_exact_discovered_root_instead_of_using_an_ancest
                 }
             ]
 
-        async def list_workspaces(self) -> list[dict[str, Any]]:
+        async def list_workspaces(self) -> list[JsonObject]:
             return list(self.workspaces)
 
         async def create_workspace(
             self,
             name: str,
             root_path: str,
-            config: dict[str, Any] | None = None,
+            config: JsonObject | None = None,
             vcs: str | None = None,
             replace_existing: bool = False,
-        ) -> dict[str, Any]:
+        ) -> JsonObject:
             del config, replace_existing
-            created: dict[str, Any] = {
+            created: dict[str, JsonValue] = {
                 "workspace_id": "ws_nested",
                 "name": name,
                 "root_path": root_path,

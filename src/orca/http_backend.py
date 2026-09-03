@@ -11,7 +11,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from orca.app.model import TaskEvent, ThreadReplay
 from orca.backend import (
@@ -32,6 +32,7 @@ from orca.backend import (
 )
 from orca.client import ApiError, HttpApiClient, SSEEvent
 from orca.connection import Connection
+from orca.json_types import JsonObject, JsonValue
 from orca.server_manager import ManagedServerError, ensure_local_server
 from orca.workspace_context import (
     WorkspaceBinding,
@@ -41,11 +42,11 @@ from orca.workspace_context import (
 
 
 class _BackendHttpClient(Protocol):
-    async def capabilities(self) -> dict[str, Any]: ...
+    async def capabilities(self) -> JsonObject: ...
 
     async def create_thread(
         self, workspace_id: str | None = None, title: str = ""
-    ) -> dict[str, Any]: ...
+    ) -> JsonObject: ...
 
     async def create_run(
         self,
@@ -55,9 +56,9 @@ class _BackendHttpClient(Protocol):
         *,
         mode: str | None = None,
         approval_policy: str | None = None,
-        client_context: dict[str, Any] | None = None,
+        client_context: JsonObject | None = None,
         idempotency_key: str | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> JsonObject: ...
 
     def stream_events(
         self,
@@ -67,13 +68,13 @@ class _BackendHttpClient(Protocol):
         visibility: str = "user",
     ) -> AsyncGenerator[SSEEvent, None]: ...
 
-    async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]: ...
+    async def send_command(self, run_id: str, command: JsonObject) -> JsonObject: ...
 
-    async def list_threads(self, **params: Any) -> dict[str, Any]: ...
+    async def list_threads(self, **params: str | int | None) -> JsonObject: ...
 
-    async def get_thread(self, thread_id: str) -> dict[str, Any]: ...
+    async def get_thread(self, thread_id: str) -> JsonObject: ...
 
-    async def list_runs(self, **params: Any) -> dict[str, Any]: ...
+    async def list_runs(self, **params: str | int | None) -> JsonObject: ...
 
     async def read_events(
         self,
@@ -90,7 +91,7 @@ ServerEnsurer = Callable[[Connection], Awaitable[object]]
 WorkspaceResolver = Callable[..., Awaitable[WorkspaceBinding]]
 
 
-def _wire(command: Command) -> dict[str, Any]:
+def _wire(command: Command) -> dict[str, str]:
     """One command as the HTTP contract's body.
 
     The wire vocabulary is unchanged by typing the Python side -- `type` is still the same
@@ -158,7 +159,7 @@ class HttpBackend:
         self._protocol_version = str(discovery.get("protocol_version") or "?")
         return self._session_info()
 
-    async def _capabilities_or_say_why(self) -> dict[str, Any]:
+    async def _capabilities_or_say_why(self) -> JsonObject:
         """The first request of every session, and the one that says what is on the far end.
 
         A 404 here means something is listening and it is not a harness. Reporting the raw
@@ -174,8 +175,8 @@ class HttpBackend:
             if exc.status in {404, 405}:
                 raise BackendError(
                     f"{self.connection.endpoint} answered, but it is not a harness: "
-                    f"GET /capabilities returned {exc.status}. Check the URL points at the "
-                    "backend rather than at a model endpoint or another service."
+                    + f"GET /capabilities returned {exc.status}. Check the URL points at the "
+                    + "backend rather than at a model endpoint or another service."
                 ) from exc
             raise
 
@@ -222,7 +223,7 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
 
     async def send_command(self, run_id: str, command: Command) -> CommandOutcome:
-        body: dict[str, Any] = {"command_id": _new_identity("cmd"), **_wire(command)}
+        body: dict[str, JsonValue] = {"command_id": _new_identity("cmd"), **_wire(command)}
         try:
             response = await self._client.send_command(run_id, body)
         except ApiError as exc:
@@ -343,12 +344,8 @@ def normalize_event(event: SSEEvent) -> TaskEvent | None:
     if event.event == "stream.end":
         return None
     data = event.data
-    raw_sequence = data.get("seq", event.id)
-    try:
-        sequence = int(raw_sequence)
-    except (TypeError, ValueError):
-        return None
-    if sequence < 1:
+    sequence = _sequence_number(data.get("seq", event.id))
+    if sequence is None or sequence < 1:
         return None
     payload = data.get("payload")
     return TaskEvent(
@@ -358,6 +355,15 @@ def normalize_event(event: SSEEvent) -> TaskEvent | None:
         visibility=str(data.get("visibility") or "user"),
         payload=payload if isinstance(payload, Mapping) else {},
     )
+
+
+def _sequence_number(value: JsonValue) -> int | None:
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _new_identity(prefix: str) -> str:

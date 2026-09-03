@@ -269,7 +269,7 @@ def create_auth_app(
         }:
             typer.echo(
                 f"The {_source_label(connection.credential_source)} credential remains active; "
-                "unset or remove that explicit source to finish logging out."
+                + "unset or remove that explicit source to finish logging out."
             )
 
     return application

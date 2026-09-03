@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import cast
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -42,7 +43,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     options = parser.parse_args()
-    HTTPServer((options.host, options.port), Handler).serve_forever()
+    host = cast(str, options.host)
+    port = cast(int, options.port)
+    HTTPServer((host, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

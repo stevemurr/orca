@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
+
+from orca.json_types import JsonObject
 
 
 class ViewId(str, Enum):
@@ -44,7 +45,7 @@ class TaskEvent:
     event_id: str
     kind: str
     visibility: str
-    payload: Mapping[str, Any]
+    payload: JsonObject
 
 
 @dataclass(frozen=True, slots=True)

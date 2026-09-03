@@ -155,14 +155,19 @@ def test_plain_single_line_prose_with_markdown_characters_is_not_rewritten() -> 
 
 @pytest.mark.parametrize("width", (24, 40, 80, 120))
 def test_rich_markdown_never_exceeds_the_requested_console_width(width: int) -> None:
-    source = (
-        "# Rendering matrix\n\n"
-        "A long token: " + "a" * 160 + "\n\n"
-        "| Path | Description |\n"
-        "|---|---|\n"
-        "| `src/with/a/very/long/path.py` | A deliberately long description that must fold. |\n\n"
-        "1. ordered\n"
-        "2. ordered again"
+    source = "\n".join(
+        (
+            "# Rendering matrix",
+            "",
+            "A long token: " + "a" * 160,
+            "",
+            "| Path | Description |",
+            "|---|---|",
+            "| `src/with/a/very/long/path.py` | A deliberately long description that must fold. |",
+            "",
+            "1. ordered",
+            "2. ordered again",
+        )
     )
     stream = StringIO()
     console = Console(file=stream, width=width, color_system=None)
