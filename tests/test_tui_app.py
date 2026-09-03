@@ -291,8 +291,7 @@ async def test_help_overlay_scrolls_on_a_short_terminal() -> None:
         assert card.scroll_y == card.max_scroll_y
 
 
-async def test_an_approval_is_asked_in_the_transcript_and_kept_there_once_decided() -> None:
-    from orca.app.model import ApprovalRecord
+async def test_an_approval_is_asked_in_the_transcript_and_said_once_when_decided() -> None:
 
     backend = FakeBackend()
     app = OrcaApp(backend)
@@ -333,9 +332,7 @@ async def test_an_approval_is_asked_in_the_transcript_and_kept_there_once_decide
         await pilot.pause()
 
         assert app.model.interaction is None
-        assert app.model.turns[-1].timeline[-1] == ApprovalRecord(
-            "Run the tests?", "/bin/sh -c 'pytest -q'", "Rejected"
-        )
+        assert app.model.notices[-1].message == "Rejected: Run the tests?"
         assert app.query_one(Composer).approval_keys == {}
 
 

@@ -13,7 +13,6 @@ from rich.text import Text
 
 from orca.app.model import (
     Activity,
-    ApprovalRecord,
     AppState,
     Narration,
     ProgressItem,
@@ -73,8 +72,6 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 rows.append(Padding(answer_markdown(segment.text), (0, 1)))
             elif isinstance(segment, TurnNote):
                 rows.append(Padding(_note_row(segment), (0, 1)))
-            elif isinstance(segment, ApprovalRecord):
-                rows.append(Padding(_approval_row(segment), (0, 1)))
         asked = state.interaction
         if (
             asked is not None
@@ -308,18 +305,6 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
     )
     tip = Text.assemble(("Tip: ", MUTED), ("/help", ACCENT), (" lists every command", MUTED))
     return [panel, tip]
-
-
-def _approval_row(record: ApprovalRecord) -> RenderableType:
-    approved = record.decision.startswith("Approved")
-    line = Text.assemble(
-        ("✓ " if approved else "✗ ", SUCCESS if approved else ERROR),
-        (record.decision, f"bold {MUTED}"),
-        (f"  {record.title}" if record.title else "", MUTED),
-    )
-    if not record.command:
-        return line
-    return Group(line, Text(f"  $ {record.command}", style=MUTED, overflow="fold"))
 
 
 #: A box with a left edge and nothing else, for words the person sent while the run was

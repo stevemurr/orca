@@ -547,9 +547,8 @@ def test_a_cancelled_run_keeps_what_the_model_said_and_says_where_it_stopped() -
     )
 
 
-def test_an_approval_is_kept_in_the_transcript_once_decided() -> None:
+def test_an_approval_is_said_once_near_the_composer_once_decided() -> None:
     from orca.app.actions import ApprovalDecided, OperationFailed
-    from orca.app.model import ApprovalRecord
 
     asked = feed(
         _running(),
@@ -577,13 +576,11 @@ def test_an_approval_is_kept_in_the_transcript_once_decided() -> None:
         sent.state, event(3, "approval.resolved", {"approval_id": "a1", "decision": "allow"})
     )
     assert decided.interaction is None
-    assert decided.turns[-1].timeline[-1] == ApprovalRecord(
-        "run: pytest", "/bin/sh -c pytest", "Approved"
-    )
-    assert decided.notices == ()
+    assert all(not isinstance(item, TurnNote) for item in decided.turns[-1].timeline)
+    assert decided.notices[-1].message == "Approved: run: pytest"
 
     quiet = reduce(decided, CommandCompleted("resolveapproval", CommandOutcome("allow")))
-    assert quiet.state.notices == ()
+    assert quiet.state.notices == decided.notices
 
 
 def test_tools_toggles_whether_every_call_is_shown() -> None:

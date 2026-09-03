@@ -133,20 +133,10 @@ class Activity:
     update_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class ApprovalRecord:
-    """An approval as the transcript keeps it once decided: what was asked, and the answer."""
-
-    title: str
-    command: str
-    #: The decision as a person would say it: "Approved", "Rejected".
-    decision: str
-
-
-#: One turn as it happened: words, tool calls, notes and decisions in arrival order. A turn
-#: used to keep its activity rows and its answer apart and render every row above the whole
-#: answer, so a tool called between two paragraphs showed up before the first. (2026-09-03)
-Segment = Narration | Activity | TurnNote | ApprovalRecord
+#: One turn as it happened: words, tool calls and notes in arrival order. A turn used to keep
+#: its activity rows and its answer apart and render every row above the whole answer, so a
+#: tool called between two paragraphs showed up before the first. (2026-09-03)
+Segment = Narration | Activity | TurnNote
 
 
 @dataclass(frozen=True, slots=True)

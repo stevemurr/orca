@@ -32,7 +32,6 @@ from orca.app.actions import (
 from orca.app.commands import parse_input
 from orca.app.model import (
     Activity,
-    ApprovalRecord,
     AppState,
     ArtifactOffer,
     InteractionState,
@@ -609,19 +608,13 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
 
     if kind == "approval.resolved":
-        # The prompt was in the transcript; its answer stays there, where it was decided,
-        # as an editor's agent keeps it. The tool row that follows shows what was done.
+        # The prompt leaves the transcript with its answer said once, near the composer, and
+        # gone: the tool row that follows shows what was done, and that is the record.
         decided = replace(state, interaction=None, run_status=RunStatus.RUNNING)
         asked = state.interaction
-        record = ApprovalRecord(
-            title=asked.title if asked is not None and asked.kind == "approval" else "",
-            command=asked.command if asked is not None and asked.kind == "approval" else "",
-            decision=_decision_label(_string(payload, "decision")),
-        )
-        turn = _latest_turn(decided)
-        return Transition(
-            _replace_latest_turn(decided, replace(turn, timeline=(*turn.timeline, record)))
-        )
+        title = asked.title if asked is not None and asked.kind == "approval" else ""
+        verdict = _decision_label(_string(payload, "decision"))
+        return Transition(_notice(decided, f"{verdict}: {title}" if title else verdict))
 
     if kind == "question.resolved":
         return Transition(replace(state, interaction=None, run_status=RunStatus.RUNNING))
