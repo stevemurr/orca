@@ -27,6 +27,11 @@ class RunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+#: How loudly a notice is shown. Closed, because it is orca's own vocabulary: a backend never
+#: sends one, so there is no unknown value to carry.
+NoticeLevel = Literal["info", "warning", "error"]
+
+
 @dataclass(frozen=True, slots=True)
 class TaskEvent:
     """One decoded public backend event.
@@ -110,7 +115,7 @@ class InteractionState:
 @dataclass(frozen=True, slots=True)
 class Notice:
     message: str
-    level: Literal["info", "warning", "error"] = "info"
+    level: NoticeLevel = "info"
 
 
 @dataclass(frozen=True, slots=True)

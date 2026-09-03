@@ -25,7 +25,7 @@ generic client stops being generic:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -220,7 +220,7 @@ class TerminalBackend(Protocol):
         *,
         after_seq: int,
         developer: bool,
-    ) -> AsyncIterator[TaskEvent]:
+    ) -> AsyncGenerator[TaskEvent, None]:
         """Yield this run's events in `seq` order, starting after `after_seq`.
 
         The one cursor rule: the same `after_seq` always yields the same suffix. orca reconnects
@@ -236,7 +236,9 @@ class TerminalBackend(Protocol):
         what a recoverable disconnect looks like.
 
         Note this is the one method that is not `async def`: it is an async *generator*
-        function, so it is called without `await`.
+        function, so it is called without `await`. The return type says generator rather than
+        iterator because orca closes the stream it stops reading (`aclose()`), so a plain
+        iterator with no way to be closed would leak the connection behind it.
         """
         ...
 

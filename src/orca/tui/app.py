@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import ClassVar, cast
 
 from textual import events, on
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.widgets import ContentSwitcher, Static, TextArea
 
 from orca.app.actions import (
+    Action,
     Back,
     CommandCompleted,
     CommandInvoked,
@@ -56,10 +57,10 @@ class OrcaApp(App[None]):
 
     TITLE = "orca"
     COMMANDS = App.COMMANDS | {OrcaCommands}
-    BINDINGS = (
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "context_escape", "Back", show=False),
         Binding("ctrl+q", "quit", "Quit", show=False),
-    )
+    ]
     CSS = """
     Screen {
         background: $background;
@@ -236,7 +237,7 @@ class OrcaApp(App[None]):
     def on_resize(self, event: events.Resize) -> None:
         self.apply_model_action(ViewportChanged(event.size.width, event.size.height))
 
-    def apply_model_action(self, action) -> None:  # type: ignore[no-untyped-def]
+    def apply_model_action(self, action: Action) -> None:
         transition = reduce(self.model, action)
         self.model = transition.state
         if self.is_mounted and not isinstance(action, ComposerChanged):
@@ -273,7 +274,7 @@ class OrcaApp(App[None]):
         elif self.model.active_run_id:
             self.apply_model_action(CommandInvoked("pause"))
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         self.apply_model_action(CommandInvoked("quit"))
 
     def _render_model(self) -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import ClassVar, Protocol
 
 from rich.console import RenderableType
 from textual.app import ComposeResult
@@ -12,11 +12,18 @@ from textual.widgets import Static
 from orca.app.model import AppState
 
 
+class StateRenderer(Protocol):
+    """A pure projection of application state at one width, as `orca.tui.render` exports them."""
+
+    def __call__(self, state: AppState, *, width: int) -> RenderableType: ...
+
+
 class RenderedView(VerticalScroll):
     """Scrollable view whose only input is immutable application state."""
 
-    renderer: Callable[..., RenderableType]
-    follow_output = False
+    #: Set by each concrete view as `staticmethod(render_x)`, so the function is not bound.
+    renderer: ClassVar[StateRenderer]
+    follow_output: ClassVar[bool] = False
 
     def compose(self) -> ComposeResult:
         yield Static(id=f"{self.id}-content" if self.id else None)

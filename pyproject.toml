@@ -20,6 +20,7 @@ orca = "orca.entrypoint:app"
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.21",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -42,6 +43,10 @@ ignore = [
     # right about mutable defaults in general and wrong here.
     "B008",
 ]
+
+[tool.basedpyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

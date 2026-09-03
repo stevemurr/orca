@@ -8,7 +8,7 @@ second implementation would also be unable to do.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -162,10 +162,10 @@ class HttpApiClient:
         self,
         name: str,
         root_path: str,
-        config: dict | None = None,
+        config: dict[str, Any] | None = None,
         vcs: str | None = None,
         replace_existing: bool = False,
-    ):
+    ) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "root_path": root_path}
         if config is not None:
             body["config"] = config
@@ -177,12 +177,14 @@ class HttpApiClient:
             body["replace_existing"] = True
         return await self._request("POST", "/workspaces", json=body)
 
-    async def list_workspaces(self):
+    async def list_workspaces(self) -> list[dict[str, Any]]:
         return await self._request("GET", "/workspaces")
 
     # -- threads and runs ----------------------------------------------------------------
 
-    async def create_thread(self, workspace_id: str | None = None, title: str = ""):
+    async def create_thread(
+        self, workspace_id: str | None = None, title: str = ""
+    ) -> dict[str, Any]:
         return await self._request(
             "POST", "/threads", json={"workspace_id": workspace_id, "title": title}
         )
@@ -197,7 +199,7 @@ class HttpApiClient:
         approval_policy: str | None = None,
         client_context: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
-    ):
+    ) -> dict[str, Any]:
         """Start a run.
 
         Every optional field here is one orca's own surface can express. The contract permits a
@@ -222,27 +224,27 @@ class HttpApiClient:
             return await self._idempotent_post(path, json=body, headers=headers)
         return await self._request("POST", path, json=body, headers=headers)
 
-    async def list_runs(self, **params):
+    async def list_runs(self, **params: Any) -> dict[str, Any]:
         return await self._request(
             "GET", "/runs", params={k: v for k, v in params.items() if v is not None}
         )
 
-    async def get_thread(self, thread_id: str):
+    async def get_thread(self, thread_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/threads/{thread_id}")
 
-    async def list_threads(self, **params):
+    async def list_threads(self, **params: Any) -> dict[str, Any]:
         return await self._request(
             "GET", "/threads", params={k: v for k, v in params.items() if v is not None}
         )
 
-    async def send_command(self, run_id: str, command: dict[str, Any]):
+    async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]:
         if command.get("command_id"):
             return await self._idempotent_post(f"/runs/{run_id}/commands", json=command)
         return await self._request("POST", f"/runs/{run_id}/commands", json=command)
 
     # -- discovery ---------------------------------------------------------------------
 
-    async def capabilities(self):
+    async def capabilities(self) -> dict[str, Any]:
         return await self._request("GET", "/capabilities")
 
     # -- events ----------------------------------------------------------------------------
@@ -276,7 +278,7 @@ class HttpApiClient:
 
     async def stream_events(
         self, run_id: str, *, after_seq: int = 0, visibility: str = "user"
-    ) -> AsyncIterator[SSEEvent]:
+    ) -> AsyncGenerator[SSEEvent, None]:
         """Follow a run, resuming automatically from the last seq seen.
 
         Reconnecting on a dropped connection is the client's job, not the server's, and it

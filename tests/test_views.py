@@ -200,6 +200,7 @@ def test_markdown_headings_keep_visible_semantic_styling() -> None:
     segments = Console(force_terminal=True, color_system="truecolor").render(renderable)
     heading = next(segment for segment in segments if segment.text.strip() == "Findings")
 
+    assert heading.style is not None
     assert heading.style.bold is True
     assert heading.style.color == Color.parse(ACCENT)
 

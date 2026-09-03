@@ -7,22 +7,27 @@ from functools import partial
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 
 from orca.app.commands import visible_commands
+from orca.tui.host import ModelHost, model_host
 
 
 class OrcaCommands(Provider):
+    @property
+    def _host(self) -> ModelHost:
+        return model_host(self.app)
+
     async def discover(self) -> Hits:
-        developer = bool(getattr(self.app, "model", None).developer)
-        for command in visible_commands(developer=developer):
+        host = self._host
+        for command in visible_commands(developer=host.model.developer):
             yield DiscoveryHit(
                 f"/{command.name}",
-                partial(self.app.invoke_command, command.name, ""),  # type: ignore[attr-defined]
+                partial(host.invoke_command, command.name, ""),
                 help=command.summary,
             )
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
-        developer = bool(getattr(self.app, "model", None).developer)
-        for command in visible_commands(developer=developer):
+        host = self._host
+        for command in visible_commands(developer=host.model.developer):
             candidate = f"/{command.name}"
             score = matcher.match(candidate + " " + command.summary)
             if score <= 0:
@@ -30,7 +35,7 @@ class OrcaCommands(Provider):
             yield Hit(
                 score,
                 matcher.highlight(candidate),
-                partial(self.app.invoke_command, command.name, ""),  # type: ignore[attr-defined]
+                partial(host.invoke_command, command.name, ""),
                 text=candidate,
                 help=command.summary,
             )

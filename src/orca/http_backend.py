@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -52,7 +52,11 @@ class _BackendHttpClient(Protocol):
         thread_id: str,
         workspace_id: str | None,
         message: str,
-        **kwargs: Any,
+        *,
+        mode: str | None = None,
+        approval_policy: str | None = None,
+        client_context: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]: ...
 
     def stream_events(
@@ -61,7 +65,7 @@ class _BackendHttpClient(Protocol):
         *,
         after_seq: int = 0,
         visibility: str = "user",
-    ) -> AsyncIterator[SSEEvent]: ...
+    ) -> AsyncGenerator[SSEEvent, None]: ...
 
     async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -204,7 +208,7 @@ class HttpBackend:
         *,
         after_seq: int,
         developer: bool,
-    ) -> AsyncIterator[TaskEvent]:
+    ) -> AsyncGenerator[TaskEvent, None]:
         try:
             async for event in self._client.stream_events(
                 run_id,

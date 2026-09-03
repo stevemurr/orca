@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from orca.app.actions import (
     Back,
     Connected,
@@ -44,19 +46,19 @@ def test_navigation_is_state_not_terminal_side_effect() -> None:
 
 
 def test_boot_preserves_an_explicit_thread_but_workspace_switch_resets_context() -> None:
-    info = {
-        "profile": "local",
-        "endpoint": "http://127.0.0.1:8420",
-        "protocol_version": "1.6",
-        "workspace_id": "ws-2",
-        "workspace_name": "other",
-        "workspace_path": "/other",
-        "cwd_relative": ".",
-    }
+    connected = Connected(
+        profile="local",
+        endpoint="http://127.0.0.1:8420",
+        protocol_version="1.6",
+        workspace_id="ws-2",
+        workspace_name="other",
+        workspace_path="/other",
+        cwd_relative=".",
+    )
     initial = AppState(thread_id="thread-explicit")
 
-    booted = reduce(initial, Connected(**info)).state
-    switched = reduce(booted, Connected(**info, reset_conversation=True)).state
+    booted = reduce(initial, connected).state
+    switched = reduce(booted, replace(connected, reset_conversation=True)).state
 
     assert booted.thread_id == "thread-explicit"
     assert switched.thread_id is None

@@ -6,7 +6,7 @@ import asyncio
 import sys
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, Literal
 
 import typer
 from rich.console import Console
@@ -25,7 +25,7 @@ from orca.connection import (
 )
 from orca.http_backend import HttpBackend
 from orca.output.plain import run_once
-from orca.server_manager import LocalServerManager, ManagedServerError
+from orca.server_manager import LocalServerManager, ManagedServerError, ManagedServerStatus
 from orca.tui.app import OrcaApp
 
 
@@ -205,14 +205,24 @@ def launch_tui(
         raise typer.Exit(1) from exc
 
 
-def _server_action(ctx: typer.Context, action: str) -> None:
+ServerAction = Literal["status", "start", "stop", "restart"]
+
+
+def _server_action(ctx: typer.Context, action: ServerAction) -> None:
     options = _options(ctx)
 
-    async def execute():  # type: ignore[no-untyped-def]
+    async def execute() -> ManagedServerStatus:
         connection = resolve_connection(profile=options.profile, url=options.url)
         manager = LocalServerManager(connection)
-        operation = getattr(manager, action)
-        return await operation()
+        match action:
+            case "status":
+                return await manager.status()
+            case "start":
+                return await manager.start()
+            case "stop":
+                return await manager.stop()
+            case "restart":
+                return await manager.restart()
 
     status = _run(execute())
     state = "running" if status.running else "stopped"

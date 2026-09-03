@@ -11,6 +11,7 @@ import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import urlsplit
 
 import typer
@@ -98,7 +99,7 @@ def create_auth_app(
         directory = Path.cwd() if cwd is None else cwd
         return repository, store, environment, directory
 
-    def fail(exc: Exception) -> None:
+    def fail(exc: Exception) -> NoReturn:
         typer.echo(f"Authentication configuration error: {exc}", err=True)
         raise typer.Exit(1) from exc
 

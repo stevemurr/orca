@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,14 +22,18 @@ class FakeClient:
         self.commands: list[dict[str, object]] = []
         self.closed = False
 
-    async def capabilities(self):  # type: ignore[no-untyped-def]
+    async def capabilities(self) -> dict[str, Any]:
         return {"protocol_version": "1.6"}
 
-    async def create_thread(self, workspace_id=None, title=""):  # type: ignore[no-untyped-def]
+    async def create_thread(
+        self, workspace_id: str | None = None, title: str = ""
+    ) -> dict[str, Any]:
         self.created_threads.append({"workspace_id": workspace_id, "title": title})
         return {"thread_id": "thread-1"}
 
-    async def create_run(self, thread_id, workspace_id, message, **kwargs):  # type: ignore[no-untyped-def]
+    async def create_run(
+        self, thread_id: str, workspace_id: str | None, message: str, **kwargs: Any
+    ) -> dict[str, Any]:
         self.created_runs.append(
             {
                 "thread_id": thread_id,
@@ -38,7 +44,9 @@ class FakeClient:
         )
         return {"run_id": "run-1", "thread_id": thread_id}
 
-    async def stream_events(self, run_id, *, after_seq=0, visibility="user"):  # type: ignore[no-untyped-def]
+    async def stream_events(
+        self, run_id: str, *, after_seq: int = 0, visibility: str = "user"
+    ) -> AsyncGenerator[SSEEvent, None]:
         del run_id, after_seq, visibility
         yield SSEEvent(
             "1",
@@ -52,22 +60,22 @@ class FakeClient:
         )
         yield SSEEvent("1", "stream.end", {"reason": "terminal", "final_seq": 1})
 
-    async def send_command(self, run_id, command):  # type: ignore[no-untyped-def]
+    async def send_command(self, run_id: str, command: dict[str, Any]) -> dict[str, Any]:
         self.commands.append({"run_id": run_id, **command})
         return {"status": "accepted"}
 
-    async def list_threads(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def list_threads(self, **kwargs: Any) -> dict[str, Any]:
         del kwargs
         return {"threads": [{"thread_id": "thread-1", "title": "hello"}]}
 
-    async def get_thread(self, thread_id):  # type: ignore[no-untyped-def]
+    async def get_thread(self, thread_id: str) -> dict[str, Any]:
         return {
             "thread_id": thread_id,
             "workspace_id": "ws-1",
             "title": "hello",
         }
 
-    async def list_runs(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def list_runs(self, **kwargs: Any) -> dict[str, Any]:
         assert kwargs == {"thread_id": "thread-1", "limit": 50}
         return {
             "runs": [
@@ -77,12 +85,8 @@ class FakeClient:
         }
 
     async def read_events(
-        self,
-        run_id,
-        *,
-        visibility="all",
-        ticks=1,  # type: ignore[no-untyped-def]
-    ):
+        self, run_id: str, *, visibility: str = "all", ticks: int = 1
+    ) -> list[SSEEvent]:
         assert visibility == "user"
         assert ticks == 1
         terminal = (
@@ -123,11 +127,13 @@ def binding() -> WorkspaceBinding:
     return WorkspaceBinding("ws-1", "project", root, root, ".", "none")
 
 
-async def no_server(_connection):  # type: ignore[no-untyped-def]
+async def no_server(_connection: Connection) -> None:
     return None
 
 
-async def fixed_workspace(_client, *, selector="", path=None):  # type: ignore[no-untyped-def]
+async def fixed_workspace(
+    _client: object, *, selector: str = "", path: Path | None = None
+) -> WorkspaceBinding:
     del selector, path
     return binding()
 
@@ -166,7 +172,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
     client = FakeClient()
     backend = HttpBackend(
         connection(),
-        client=client,  # type: ignore[arg-type]
+        client=client,
         server_ensurer=no_server,
         workspace_resolver=fixed_workspace,
     )
@@ -206,12 +212,12 @@ async def test_a_server_that_is_not_a_harness_says_so() -> None:
     """
 
     class NotAHarness(FakeClient):
-        async def capabilities(self):
+        async def capabilities(self) -> dict[str, Any]:
             raise ApiError(404, "not_found", "Not Found")
 
     backend = HttpBackend(
         connection(),
-        client=NotAHarness(),  # type: ignore[arg-type]
+        client=NotAHarness(),
         server_ensurer=no_server,
         workspace_resolver=fixed_workspace,
     )

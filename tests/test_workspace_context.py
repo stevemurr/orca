@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,21 +19,21 @@ from tests.conftest import git
 class _RecordingWorkspaceClient:
     """A small API double that preserves the contract's replace-in-place semantics."""
 
-    def __init__(self, workspaces: list[dict] | None = None) -> None:
-        self.workspaces = list(workspaces or [])
-        self.creations: list[dict] = []
+    def __init__(self, workspaces: list[dict[str, Any]] | None = None) -> None:
+        self.workspaces: list[dict[str, Any]] = list(workspaces or [])
+        self.creations: list[dict[str, Any]] = []
 
-    async def list_workspaces(self):
+    async def list_workspaces(self) -> list[dict[str, Any]]:
         return list(self.workspaces)
 
     async def create_workspace(
         self,
-        name,
-        root_path,
-        config=None,
-        vcs=None,
-        replace_existing=False,
-    ):
+        name: str,
+        root_path: str,
+        config: dict[str, Any] | None = None,
+        vcs: str | None = None,
+        replace_existing: bool = False,
+    ) -> dict[str, Any]:
         root = Path(root_path).resolve()
         existing = next(
             (
@@ -51,7 +52,7 @@ class _RecordingWorkspaceClient:
         }
         self.creations.append(call)
         identity = git(root, "rev-list", "--max-parents=0", "HEAD") if vcs == "git" else None
-        created = {
+        created: dict[str, Any] = {
             "workspace_id": (
                 existing["workspace_id"]
                 if existing is not None and replace_existing
@@ -146,7 +147,7 @@ def test_resolver_registers_the_exact_discovered_root_instead_of_using_an_ancest
 
     class _Client:
         def __init__(self) -> None:
-            self.workspaces = [
+            self.workspaces: list[dict[str, Any]] = [
                 {
                     "workspace_id": "ws_outer",
                     "name": "outer",
@@ -155,11 +156,19 @@ def test_resolver_registers_the_exact_discovered_root_instead_of_using_an_ancest
                 }
             ]
 
-        async def list_workspaces(self):
+        async def list_workspaces(self) -> list[dict[str, Any]]:
             return list(self.workspaces)
 
-        async def create_workspace(self, name, root_path, *, vcs=None, **_kwargs):
-            created = {
+        async def create_workspace(
+            self,
+            name: str,
+            root_path: str,
+            config: dict[str, Any] | None = None,
+            vcs: str | None = None,
+            replace_existing: bool = False,
+        ) -> dict[str, Any]:
+            del config, replace_existing
+            created: dict[str, Any] = {
                 "workspace_id": "ws_nested",
                 "name": name,
                 "root_path": root_path,

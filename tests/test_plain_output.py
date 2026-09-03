@@ -2,55 +2,40 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, Sequence
 from io import StringIO
 
 import orjson
 
 from orca.app.model import TaskEvent
-from orca.backend import RunInfo, RunRequest, SessionInfo
+from orca.backend import RunInfo, RunRequest
 from orca.output.plain import run_once
+from tests.support.backends import ScriptedBackend
 
 
-class PlainBackend:
-    async def connect(self) -> SessionInfo:
-        return SessionInfo("local", "http://localhost", "1.6", "ws-1", "project", "/project")
-
+class PlainBackend(ScriptedBackend):
     async def start_run(self, request: RunRequest) -> RunInfo:
         assert request.workspace_id == "ws-1"
-        return RunInfo("run-1", "thread-1")
+        return self.accepted
 
-    async def stream(
-        self, run_id: str, *, after_seq: int, developer: bool
-    ) -> AsyncIterator[TaskEvent]:
-        del run_id, after_seq, developer
-        yield TaskEvent(
-            1,
-            "evt-1",
-            "run.created",
-            "user",
-            {"message": "Build it"},
-        )
-        yield TaskEvent(
-            2,
-            "evt-2",
-            "run.progress",
-            "user",
-            {"update_id": "work:one", "status": "active", "text": "Building it."},
-        )
-        yield TaskEvent(
-            3,
-            "evt-3",
-            "run.completed",
-            "user",
-            {"summary": "Built and verified it."},
+    def events(self) -> Sequence[TaskEvent]:
+        return (
+            TaskEvent(1, "evt-1", "run.created", "user", {"message": "Build it"}),
+            TaskEvent(
+                2,
+                "evt-2",
+                "run.progress",
+                "user",
+                {"update_id": "work:one", "status": "active", "text": "Building it."},
+            ),
+            TaskEvent(3, "evt-3", "run.completed", "user", {"summary": "Built and verified it."}),
         )
 
 
 class ApprovalBackend(PlainBackend):
     async def stream(
         self, run_id: str, *, after_seq: int, developer: bool
-    ) -> AsyncIterator[TaskEvent]:
+    ) -> AsyncGenerator[TaskEvent, None]:
         del run_id, after_seq, developer
         yield TaskEvent(
             1,
@@ -65,7 +50,7 @@ class ApprovalBackend(PlainBackend):
 async def test_plain_run_prints_progress_then_canonical_answer() -> None:
     output = StringIO()
     code = await run_once(
-        PlainBackend(),  # type: ignore[arg-type]
+        PlainBackend(),
         RunRequest("Build it", None, "", ".", "auto", "safe"),
         stdout=output,
     )
@@ -77,7 +62,7 @@ async def test_plain_run_prints_progress_then_canonical_answer() -> None:
 async def test_jsonl_is_versioned_and_keeps_wire_facts_structured() -> None:
     output = StringIO()
     await run_once(
-        PlainBackend(),  # type: ignore[arg-type]
+        PlainBackend(),
         RunRequest("Build it", None, "", ".", "auto", "safe"),
         stdout=output,
         jsonl=True,
@@ -100,7 +85,7 @@ async def test_jsonl_is_versioned_and_keeps_wire_facts_structured() -> None:
 async def test_no_follow_prints_only_copyable_run_identity() -> None:
     output = StringIO()
     await run_once(
-        PlainBackend(),  # type: ignore[arg-type]
+        PlainBackend(),
         RunRequest("Build it", None, "", ".", "auto", "safe"),
         stdout=output,
         follow=False,
@@ -113,7 +98,7 @@ async def test_plain_run_detaches_with_distinct_exit_when_input_is_required() ->
     output = StringIO()
 
     code = await run_once(
-        ApprovalBackend(),  # type: ignore[arg-type]
+        ApprovalBackend(),
         RunRequest("Release it", None, "", ".", "auto", "safe"),
         stdout=output,
     )
@@ -125,7 +110,7 @@ async def test_plain_run_detaches_with_distinct_exit_when_input_is_required() ->
 class PlanBackend(PlainBackend):
     async def stream(
         self, run_id: str, *, after_seq: int, developer: bool
-    ) -> AsyncIterator[TaskEvent]:
+    ) -> AsyncGenerator[TaskEvent, None]:
         del run_id, after_seq, developer
         plans = (
             [
@@ -157,7 +142,7 @@ async def test_plain_run_announces_a_step_when_it_starts_and_only_then() -> None
 
     output = StringIO()
     code = await run_once(
-        PlanBackend(),  # type: ignore[arg-type]
+        PlanBackend(),
         RunRequest("Add the endpoint", None, "", ".", "auto", "safe"),
         stdout=output,
     )

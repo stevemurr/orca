@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -150,16 +151,17 @@ def test_runtime_resolution_never_reads_a_worktree_dotenv(
 
 def test_a_credential_is_never_sent_to_a_remote_http_endpoint(tmp_path: Path) -> None:
     """The rule is about sending a secret in the clear, so it needs a secret to be about."""
-    arguments = {
-        "url": "http://orch.example:8420",
-        "environ": {"ORCA_AUTH_TOKEN": "secret"},
-        "config": ConfigRepository(home=tmp_path / "config"),
-        "credentials": _Credentials(),
-    }
+    resolve = partial(
+        resolve_connection,
+        url="http://orch.example:8420",
+        environ={"ORCA_AUTH_TOKEN": "secret"},
+        config=ConfigRepository(home=tmp_path / "config"),
+        credentials=_Credentials(),
+    )
     with pytest.raises(InsecureEndpointError, match="in the clear"):
-        resolve_connection(**arguments)
+        resolve()
 
-    allowed = resolve_connection(**arguments, allow_insecure_http=True)
+    allowed = resolve(allow_insecure_http=True)
     assert allowed.endpoint == "http://orch.example:8420"
     assert allowed.token == "secret"
 
@@ -311,16 +313,16 @@ def test_the_endpoint_reports_where_it_came_from(tmp_path: Path) -> None:
     person reading it would check the file and find it correct. (2026-08-31)"""
     config = ConfigRepository(home=tmp_path / "config")
     config.upsert_profile("default", "http://127.0.0.1:8080")
-    common = {"config": config, "credentials": _Credentials()}
+    resolve = partial(resolve_connection, config=config, credentials=_Credentials())
 
-    from_profile = resolve_connection(environ={}, **common)
+    from_profile = resolve(environ={})
     assert from_profile.endpoint_source is EndpointSource.PROFILE
 
-    from_env = resolve_connection(environ={"ORCA_URL": "http://127.0.0.1:9999"}, **common)
+    from_env = resolve(environ={"ORCA_URL": "http://127.0.0.1:9999"})
     assert from_env.endpoint_source is EndpointSource.ENVIRONMENT
     assert from_env.endpoint == "http://127.0.0.1:9999"
 
-    from_flag = resolve_connection(url="http://127.0.0.1:7777", environ={}, **common)
+    from_flag = resolve(url="http://127.0.0.1:7777", environ={})
     assert from_flag.endpoint_source is EndpointSource.FLAG
 
 

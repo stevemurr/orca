@@ -28,7 +28,7 @@ class WorkspaceClient(Protocol):
         self,
         name: str,
         root_path: str,
-        config: dict | None = None,
+        config: dict[str, Any] | None = None,
         vcs: str | None = None,
         replace_existing: bool = False,
     ) -> dict[str, Any]: ...

@@ -32,6 +32,7 @@ from orca.app.model import (
     ArtifactOffer,
     InteractionState,
     Notice,
+    NoticeLevel,
     PlanStep,
     ProgressItem,
     RunStatus,
@@ -244,7 +245,8 @@ def reduce(state: AppState, action: Action) -> Transition:
                 replayed = _event(replayed, item).state
             reported = _reported_run_status(run.status)
             if (
-                reported
+                reported is not None
+                and reported
                 in {
                     RunStatus.COMPLETED,
                     RunStatus.FAILED,
@@ -581,9 +583,8 @@ def _reported_run_status(value: str) -> RunStatus | None:
         return None
 
 
-def _notice(state: AppState, message: str, level: str = "info") -> AppState:
-    typed_level = level if level in {"info", "warning", "error"} else "info"
-    notices = (*state.notices[-3:], Notice(message, typed_level))  # type: ignore[arg-type]
+def _notice(state: AppState, message: str, level: NoticeLevel = "info") -> AppState:
+    notices = (*state.notices[-3:], Notice(message, level))
     return replace(state, notices=notices)
 
 

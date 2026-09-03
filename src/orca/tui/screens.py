@@ -17,6 +17,7 @@ from textual.widgets.option_list import Option
 from orca.app.actions import ApprovalDecided
 from orca.app.model import AppState
 from orca.backend import ThreadSummary
+from orca.tui.host import model_host
 from orca.tui.render import render_help, render_interaction
 
 
@@ -31,9 +32,6 @@ class HelpScreen(ModalScreen[None]):
         with VerticalScroll(classes="modal-card", id="help-card"):
             yield Static(render_help(developer=self._developer))
             yield Static("Esc close", classes="modal-hint")
-
-    def action_dismiss(self) -> None:
-        self.dismiss()
 
 
 class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
@@ -107,7 +105,7 @@ class ApprovalScreen(ModalScreen[None]):
             return
         self._sending = True
         self.query_one("#approval-content", Static).update(self._content())
-        self.app.apply_model_action(ApprovalDecided(decision))  # type: ignore[attr-defined]
+        model_host(self.app).apply_model_action(ApprovalDecided(decision))
 
     def allow_retry(self) -> None:
         """Restore choices after the command could not reach the backend."""

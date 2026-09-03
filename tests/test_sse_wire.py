@@ -14,6 +14,8 @@ keep-alive server does — which is exactly why `docs/backend-contract.md` has t
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 import pytest
 
@@ -36,7 +38,9 @@ MISFRAMED_END = TERMINAL_RUN.replace(
 )
 
 
-def _client(handler: object, monkeypatch: pytest.MonkeyPatch) -> HttpApiClient:
+def _client(
+    handler: Callable[[httpx.Request], httpx.Response], monkeypatch: pytest.MonkeyPatch
+) -> HttpApiClient:
     """An `HttpApiClient` whose transport is a canned SSE responder, and no reconnect pause."""
 
     async def _no_pause(attempt: int) -> None:
@@ -46,7 +50,9 @@ def _client(handler: object, monkeypatch: pytest.MonkeyPatch) -> HttpApiClient:
     client = HttpApiClient("http://backend.test")
     # The private attribute is the only seam: `HttpApiClient` builds its own transport, and a
     # constructor parameter for one would be production surface that exists only for a test.
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+    client._client = httpx.AsyncClient(  # pyright: ignore[reportPrivateUsage]
+        transport=httpx.MockTransport(handler)
+    )
     return client
 
 

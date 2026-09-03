@@ -137,11 +137,9 @@ def start_detached(
     cwd.mkdir(parents=True, exist_ok=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     stream = output_path.open("ab", buffering=0)
-    kwargs: dict[str, object] = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    # Both flags are accepted on every platform; each is a no-op where it does not apply.
+    windows = os.name == "nt"
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if windows else 0
     try:
         proc = subprocess.Popen(
             argv,
@@ -151,7 +149,8 @@ def start_detached(
             stdout=stream,
             stderr=subprocess.STDOUT,
             close_fds=True,
-            **kwargs,
+            creationflags=creationflags,
+            start_new_session=not windows,
         )
     except FileNotFoundError as exc:
         raise ProcessError(f"executable not found: {argv[0]}") from exc

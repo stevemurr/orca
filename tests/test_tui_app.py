@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+
+from textual.widgets import ContentSwitcher
 
 from orca.app.actions import EventReceived, RunAccepted
 from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
@@ -12,6 +14,7 @@ from orca.backend import (
     CommandOutcome,
     ResolveApproval,
     RunInfo,
+    RunRequest,
     SessionInfo,
     ThreadHistoryInfo,
     ThreadSummary,
@@ -28,7 +31,7 @@ def event(sequence: int, kind: str, payload: dict[str, object]) -> TaskEvent:
 class FakeBackend:
     def __init__(self) -> None:
         self.started: list[str] = []
-        self.commands: list[tuple[str, str, dict[str, str]]] = []
+        self.commands: list[tuple[str, Command]] = []
         self.streams: list[tuple[str, int, bool]] = []
         self.closed = False
 
@@ -43,13 +46,13 @@ class FakeBackend:
             cwd_relative=".",
         )
 
-    async def start_run(self, request) -> RunInfo:  # type: ignore[no-untyped-def]
+    async def start_run(self, request: RunRequest) -> RunInfo:
         self.started.append(request.message)
         return RunInfo("run-1", "thread-1")
 
     async def stream(
         self, run_id: str, *, after_seq: int, developer: bool
-    ) -> AsyncIterator[TaskEvent]:
+    ) -> AsyncGenerator[TaskEvent, None]:
         assert run_id == "run-1"
         assert after_seq == 0
         self.streams.append((run_id, after_seq, developer))
@@ -143,7 +146,7 @@ async def test_view_command_swaps_only_the_center_surface() -> None:
         await pilot.pause()
 
         assert app.model.view is ViewId.REVIEW
-        assert app.query_one("#view-host").current == "review"  # type: ignore[attr-defined]
+        assert app.query_one("#view-host", ContentSwitcher).current == "review"
 
         await pilot.press("escape")
         await pilot.pause()
@@ -277,11 +280,11 @@ async def test_help_overlay_scrolls_on_a_short_terminal() -> None:
         await pilot.pause()
 
         card = app.screen.query_one("#help-card")
-        assert card.max_scroll_y > 0  # type: ignore[attr-defined]
-        card.scroll_end(animate=False)  # type: ignore[attr-defined]
+        assert card.max_scroll_y > 0
+        card.scroll_end(animate=False)
         await pilot.pause()
 
-        assert card.scroll_y == card.max_scroll_y  # type: ignore[attr-defined]
+        assert card.scroll_y == card.max_scroll_y
 
 
 async def test_approval_overlay_scrolls_on_a_tiny_terminal() -> None:
@@ -308,12 +311,12 @@ async def test_approval_overlay_scrolls_on_a_tiny_terminal() -> None:
 
         assert isinstance(app.screen, ApprovalScreen)
         card = app.screen.query_one("#approval-card")
-        if card.max_scroll_y:  # type: ignore[attr-defined]
-            card.scroll_end(animate=False)  # type: ignore[attr-defined]
+        if card.max_scroll_y:
+            card.scroll_end(animate=False)
             await pilot.pause()
-            assert card.scroll_y == card.max_scroll_y  # type: ignore[attr-defined]
+            assert card.scroll_y == card.max_scroll_y
         else:
-            assert card.virtual_size.height <= card.size.height  # type: ignore[attr-defined]
+            assert card.virtual_size.height <= card.size.height
 
 
 async def test_approval_overlay_reflows_when_the_terminal_is_resized() -> None:
@@ -343,8 +346,8 @@ async def test_approval_overlay_reflows_when_the_terminal_is_resized() -> None:
         await pilot.pause()
         await pilot.pause()
 
-        assert card.virtual_size.width <= card.size.width  # type: ignore[attr-defined]
-        assert card.max_scroll_x == 0  # type: ignore[attr-defined]
+        assert card.virtual_size.width <= card.size.width
+        assert card.max_scroll_x == 0
 
 
 async def test_inspector_restarts_follow_with_developer_visibility() -> None:
