@@ -243,7 +243,7 @@ which is the one failure this rule exists to prevent.
 | Type | Payload read | What orca does |
 |---|---|---|
 | `run.created` | `message`, `mode`, `approval_policy` | Opens the turn with the person's request. |
-| `run.progress` | `update_id`, `text`, `status`, `arguments` | One activity row, upserted by `update_id`. `status` is `active`, `completed` or `failed`. `arguments` are the call's own, on every event for the row; a `path` with `content`, or with `old` and `new`, is shown as the code under the row. |
+| `run.progress` | `update_id`, `text`, `status`, `arguments`, `tool`, `kind` | One activity row, upserted by `update_id`. `status` is `active`, `completed` or `failed`. `arguments` are the call's own, on every event for the row; a `path` with `content`, or with `old` and `new`, is shown as the code under the row. `kind` picks the row's glyph: `read`, `search`, `edit`, `execute`, `fetch`, `think`, `switch_mode`; anything else gets a plain mark. |
 | `answer.delta` | `effect_id`, `model_call_id`, `text` | Streams the answer. The pair identifies one attempt; a delta from a different pair discards what was streamed and starts again. Both are opaque — repeat one value in both if you have a single attempt identity. |
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |

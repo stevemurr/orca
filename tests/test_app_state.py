@@ -588,3 +588,17 @@ def test_usage_is_read_from_the_backend_and_reset_with_the_conversation() -> Non
     finished = feed(state, event(3, "run.completed", {"summary": "Done."}))
     assert finished.usage == Usage(1200, 8000, estimated=True)
     assert reduce(finished, CommandInvoked("new", "")).state.usage is None
+
+
+def test_a_rows_kind_is_read_from_the_backend_and_survives_an_upsert() -> None:
+    state = feed(
+        _running(),
+        event(
+            2,
+            "run.progress",
+            {"update_id": "r", "text": "read a", "status": "active", "kind": "read"},
+        ),
+        event(3, "run.progress", {"update_id": "r", "text": "read a", "status": "completed"}),
+    )
+
+    assert state.turns[-1].progress[0].kind == "read"

@@ -485,6 +485,7 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             snippets=_snippets(arguments)
             if isinstance(arguments, Mapping)
             else (held.snippets if held is not None else ()),
+            kind=_string(payload, "kind") or (held.kind if held is not None else ""),
         )
         progress = _upsert_by(turn.progress, item, lambda entry: entry.update_id)
         timeline = turn.timeline

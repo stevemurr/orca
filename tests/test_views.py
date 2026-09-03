@@ -347,3 +347,24 @@ def test_the_transcript_shows_the_code_a_call_wrote_under_its_row() -> None:
     code = rendered.index("def greet():")
     answer = rendered.index("Written.")
     assert row < code < answer
+
+
+def test_each_kind_of_tool_has_its_own_quiet_glyph() -> None:
+    turn = TurnState(
+        "run-1",
+        request="Look, then change",
+        progress=(
+            ProgressItem("r", "read src/app.py", "completed", kind="read"),
+            ProgressItem("e", "edit src/app.py", "active", kind="edit"),
+            ProgressItem("x", "run: pytest", "failed", kind="execute"),
+            ProgressItem("m", "files__list", "completed", kind="other"),
+        ),
+    )
+    state = replace(populated_state(), turns=(turn,))
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+
+    assert "≡  read src/app.py" in rendered
+    assert "✎  edit src/app.py" in rendered
+    assert "$  run: pytest" in rendered
+    assert "·  files__list" in rendered

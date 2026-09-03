@@ -79,6 +79,10 @@ class ProgressItem:
     status: str = "active"
     #: The code this call wrote or changed, when the event carried its arguments.
     snippets: tuple[Snippet, ...] = ()
+    #: What sort of thing the call does -- `read`, `search`, `edit`, `execute`, `fetch`,
+    #: `think`, `switch_mode` -- in the backend's words. Empty when it did not say. An
+    #: open vocabulary: a kind orca has no icon for gets the plain one.
+    kind: str = ""
 
 
 @dataclass(frozen=True, slots=True)

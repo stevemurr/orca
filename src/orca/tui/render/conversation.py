@@ -162,8 +162,8 @@ def _activity_table(items: list[ProgressItem]) -> RenderableType:
     activity.add_column(width=2, no_wrap=True)
     activity.add_column(ratio=1, overflow="fold")
     for item in items:
-        glyph, style = _progress_glyph(item.status)
-        activity.add_row(Text(glyph, style=style), Text(item.text, style=MUTED))
+        glyph, style, text_style = _activity_look(item)
+        activity.add_row(Text(glyph, style=style), Text(item.text, style=text_style))
         for snippet in item.snippets:
             # The code under its row, the way an editor's transcript shows a write.
             activity.add_row(Text(""), code_block(snippet, lines=_TRANSCRIPT_LINES))
@@ -199,13 +199,29 @@ def _plan_glyph(status: str) -> tuple[str, str, str]:
     return "○", MUTED, MUTED
 
 
-def _progress_glyph(status: str) -> tuple[str, str]:
-    normalized = status.lower()
-    if normalized == "completed":
-        return "✓", SUCCESS
-    if normalized == "failed":
-        return "×", ERROR
-    return "●", ACCENT
+#: One quiet glyph per kind of tool, so a read, a search, a write and a command tell apart
+#: at a glance. The kind is the backend's word; one it has not said gets the plain mark.
+_KIND_GLYPHS = {
+    "read": "≡",
+    "search": "⌕",
+    "edit": "✎",
+    "execute": "$",
+    "fetch": "◎",
+    "think": "✦",
+    "switch_mode": "⇄",
+}
+
+
+def _activity_look(item: ProgressItem) -> tuple[str, str, str]:
+    """Glyph, glyph style and text style. The kind picks the glyph; the status, the colour --
+    working is bright, done is quiet, and a failure is the one row that is not."""
+    glyph = _KIND_GLYPHS.get(item.kind, "·")
+    status = item.status.lower()
+    if status == "failed":
+        return glyph, ERROR, ERROR
+    if status == "completed":
+        return glyph, MUTED, MUTED
+    return glyph, f"bold {ACCENT}", MUTED
 
 
 def welcome(state: AppState, *, width: int) -> list[RenderableType]:
