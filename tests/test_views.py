@@ -501,7 +501,7 @@ def test_a_message_sent_mid_run_is_quoted_in_the_transcript_where_it_arrived() -
 
     rendered = plain(render_conversation(state, width=90), width=90)
 
-    assert "you, mid-run" in rendered
-    assert "▎" in rendered
+    assert "▎ Use the new tokenizer" in rendered
+    assert "mid-run" not in rendered
     steer = rendered.index("Use the new tokenizer")
     assert rendered.index("read parser.py") < steer < rendered.index("Switching.")

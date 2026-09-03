@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from rich import box
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.padding import Padding
 from rich.panel import Panel
-from rich.styled import Styled
+from rich.segment import Segment as Cell
 from rich.table import Table
 from rich.text import Text
 
@@ -79,7 +79,9 @@ def render_turn(state: AppState, turn: TurnState, *, width: int) -> RenderableTy
         if isinstance(segment, Narration):
             rows.append(Padding(answer_markdown(segment.text), (0, 1)))
         elif isinstance(segment, TurnNote):
-            rows.append(Padding(_note_row(segment), (0, 1)))
+            # The steer's bar stands where the request's does, flush; the two are a pair.
+            row = _note_row(segment)
+            rows.append(row if segment.kind == "steer" else Padding(row, (0, 1)))
     asked = state.interaction
     if (
         asked is not None
@@ -331,25 +333,37 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
 #: the bar is the label.
 _BAR = box.Box("    \n▌   \n▌   \n▌   \n▌   \n▌   \n▌   \n    \n")
 
-#: The same bar, thin and grey, for words the person sent while the run was going:
-#: quoted, the way a reply quotes what it answers, and quieter than the request.
-_QUOTE = box.Box("    \n▎   \n▎   \n▎   \n▎   \n▎   \n▎   \n    \n")
-
 
 def _request_block(text: str) -> RenderableType:
     return Panel(Text(text, style="bold"), box=_BAR, border_style=ACCENT, padding=(0, 1))
 
 
+class _Barred:
+    """A renderable with a thin bar down its left edge, on every line it takes.
+
+    For words the person sent while the run was going: the same accent as the request
+    that opened the turn, so the author is plain, and thin and regular where the request
+    is heavy and bold, so the size of the act is too. No caption -- the bar says who,
+    and where it sits in the turn says when. It used to be a grey italic quote under a
+    "you, mid-run" caption on a line of its own, which read as a footnote rather than as
+    something the person said. (2026-09-03)
+    """
+
+    def __init__(self, inner: RenderableType) -> None:
+        self.inner: RenderableType = inner
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        width = max(1, options.max_width - 2)
+        bar = Cell("▎ ", console.get_style(ACCENT))
+        for line in console.render_lines(self.inner, options.update_width(width), pad=False):
+            yield bar
+            yield from line
+            yield Cell.line()
+
+
 def _note_row(note: TurnNote) -> RenderableType:
     if note.kind == "steer":
-        return Panel(
-            Styled(answer_markdown(note.text), f"italic {MUTED}"),
-            box=_QUOTE,
-            border_style=MUTED,
-            title=Text("you, mid-run", style=f"italic {MUTED}"),
-            title_align="left",
-            padding=(0, 1),
-        )
+        return _Barred(answer_markdown(note.text))
     glyph = {"compaction": "⇥", "folder": "+", "ended": "■"}[note.kind]
     style = WARNING if note.kind == "ended" else ACCENT
     return Text.assemble((f"{glyph} ", style), (note.text, f"italic {MUTED}"))
