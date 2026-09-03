@@ -53,6 +53,7 @@ from orca.tui.render import (
     render_footer,
     render_header,
     render_interaction,
+    render_notice,
     render_plan,
 )
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
@@ -71,6 +72,7 @@ class OrcaApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "context_escape", "Back", show=False),
         Binding("ctrl+q", "quit", "Quit", show=False),
+        Binding("ctrl+t", "toggle_tools", "Tool calls", show=False),
     ]
     CSS: ClassVar[str] = """
     Screen {
@@ -115,6 +117,17 @@ class OrcaApp(App[None]):
     }
 
     #plan.visible {
+        display: block;
+    }
+
+    #notice {
+        width: 100%;
+        height: 1;
+        padding: 0 1;
+        display: none;
+    }
+
+    #notice.visible {
         display: block;
     }
 
@@ -257,6 +270,7 @@ class OrcaApp(App[None]):
                 yield InspectorView(id=ViewId.INSPECTOR.value, classes="main-view")
             yield Static(id="plan")
             yield Static(id="interaction")
+            yield Static(id="notice")
             yield Static(id="command-menu")
             with Horizontal(id="composer-frame"):
                 yield Static("›", id="composer-prompt")
@@ -283,7 +297,9 @@ class OrcaApp(App[None]):
         await self.backend.close()
 
     def _tick(self) -> None:
-        if self.model.working:
+        # While a run goes, for the spinner and the elapsed time; while a notice shows, so
+        # it can go away. Otherwise nothing on screen depends on the clock.
+        if self.model.working or self.model.notices:
             self.apply_model_action(ClockTicked(time.monotonic()))
 
     def on_resize(self, event: events.Resize) -> None:
@@ -371,6 +387,9 @@ class OrcaApp(App[None]):
         elif self.model.active_run_id:
             self.apply_model_action(CommandInvoked("pause"))
 
+    def action_toggle_tools(self) -> None:
+        self.apply_model_action(CommandInvoked("tools"))
+
     @override
     async def action_quit(self) -> None:
         self.apply_model_action(CommandInvoked("quit"))
@@ -383,6 +402,11 @@ class OrcaApp(App[None]):
         self.query_one(f"#{self.model.view.value}", RenderedView).update_state(self.model)
 
         self._render_menu()
+        notice = self.query_one("#notice", Static)
+        shown = render_notice(self.model)
+        notice.set_class(shown is not None, "visible")
+        notice.update(shown or "")
+
         plan = self.query_one("#plan", Static)
         pinned = render_plan(self.model, width=max(1, width - 2))
         plan.set_class(pinned is not None, "visible")

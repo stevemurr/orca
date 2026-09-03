@@ -14,7 +14,6 @@ from orca.app.model import (
     Activity,
     AppState,
     Narration,
-    Notice,
     ProgressItem,
     Segment,
     TurnNote,
@@ -59,7 +58,7 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 # Consecutive rows share one table so their glyphs line up.
                 # A blank line either side: rows sit between paragraphs of the model's
                 # own words, and against them they read as part of the sentence.
-                rows.append(Padding(_activity_table(pending), (1, 1)))
+                rows.append(Padding(_activity_table(pending, state.tools_expanded), (1, 1)))
                 pending = []
             if isinstance(segment, Narration):
                 if not narrated:
@@ -78,9 +77,6 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                     (0, 1),
                 )
             )
-    if state.notices:
-        rows.append(Text(""))
-        rows.append(notice_row(state.notices[-1]))
     return Group(*rows) if rows else Text("")
 
 
@@ -157,13 +153,20 @@ def _timeline(turn: TurnState) -> tuple[Segment, ...]:
     return (*rows, *turn.notes, *((Narration(answer),) if answer else ()))
 
 
-def _activity_table(items: list[ProgressItem]) -> RenderableType:
+def _activity_table(items: list[ProgressItem], expanded: bool) -> RenderableType:
+    """A run of tool calls. Folded, it is the latest call and a count -- the one a person
+    is watching, and how much came before it; `/tools` or Ctrl+T shows them all."""
     activity = Table.grid(padding=(0, 1))
     activity.add_column(width=2, no_wrap=True)
     activity.add_column(ratio=1, overflow="fold")
-    for item in items:
+    shown = items if expanded or len(items) == 1 else items[-1:]
+    folded = len(items) - len(shown)
+    for item in shown:
         glyph, style, text_style = _activity_look(item)
-        activity.add_row(Text(glyph, style=style), Text(item.text, style=text_style))
+        line = Text(item.text, style=text_style)
+        if folded:
+            line.append(f"  ·  {folded + 1} tool calls ›", style=MUTED)
+        activity.add_row(Text(glyph, style=style), line)
         for snippet in item.snippets:
             # The code under its row, the way an editor's transcript shows a write.
             activity.add_row(Text(""), code_block(snippet, lines=_TRANSCRIPT_LINES))
@@ -248,13 +251,6 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
 
 
 def _note_row(note: TurnNote) -> Text:
-    glyph = {"compaction": "⇥", "steer": "↳", "folder": "+", "approval": "✓", "ended": "■"}[
-        note.kind
-    ]
+    glyph = {"compaction": "⇥", "steer": "↳", "folder": "+", "ended": "■"}[note.kind]
     style = WARNING if note.kind == "ended" else ACCENT
     return Text.assemble((f"{glyph} ", style), (note.text, f"italic {MUTED}"))
-
-
-def notice_row(notice: Notice) -> Text:
-    style = {"info": MUTED, "warning": WARNING, "error": ERROR}[notice.level]
-    return Text(f"· {notice.message}", style=style)

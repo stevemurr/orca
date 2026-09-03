@@ -109,7 +109,7 @@ class ArtifactOffer:
 #: Something that happened to a turn that is neither activity nor answer: the context was
 #: handed off to a summary, the person steered the run, a folder was added. Orca's own
 #: vocabulary, so it is closed.
-TurnNoteKind = Literal["compaction", "steer", "folder", "approval", "ended"]
+TurnNoteKind = Literal["compaction", "steer", "folder", "ended"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,8 +176,16 @@ class InteractionState:
 
 @dataclass(frozen=True, slots=True)
 class Notice:
+    """A line for a moment, near the composer: what a command did, what was decided.
+
+    Not part of the transcript. It is shown from `shown_at` on the state's clock until its
+    level's time is up, and then it is gone; the transcript keeps what happened, not what
+    was said about it in passing.
+    """
+
     message: str
     level: NoticeLevel = "info"
+    shown_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +234,8 @@ class AppState:
     run_started_at: float = 0.0
     clock: float = 0.0
     usage: Usage | None = None
+    #: Whether every tool call is shown, or a run of them folds to its latest and a count.
+    tools_expanded: bool = False
     viewport_width: int = 100
     viewport_height: int = 30
 

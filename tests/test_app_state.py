@@ -547,9 +547,9 @@ def test_a_cancelled_run_keeps_what_the_model_said_and_says_where_it_stopped() -
     )
 
 
-def test_an_approval_decision_lands_in_the_transcript_not_a_notice() -> None:
+def test_an_approval_decision_is_said_once_near_the_composer_not_in_the_transcript() -> None:
     state = feed(
-        _running(),
+        reduce(_running(), ClockTicked(50.0)).state,
         event(
             2,
             "approval.requested",
@@ -558,12 +558,18 @@ def test_an_approval_decision_lands_in_the_transcript_not_a_notice() -> None:
         event(3, "approval.resolved", {"approval_id": "a1", "decision": "allow_always"}),
     )
     assert state.interaction is None
-    assert state.turns[-1].notes == (
-        TurnNote("approval", "Approved, and always from now on: run: pytest"),
-    )
+    assert state.turns[-1].notes == ()
+    assert state.notices[-1].message == "Approved, and always from now on: run: pytest"
+    assert state.notices[-1].shown_at == 50.0
 
     quiet = reduce(state, CommandCompleted("resolveapproval", CommandOutcome("allow_always")))
-    assert quiet.state.notices == ()
+    assert quiet.state.notices == state.notices
+
+
+def test_tools_toggles_whether_every_call_is_shown() -> None:
+    opened = reduce(AppState(), CommandInvoked("tools", "")).state
+    assert opened.tools_expanded
+    assert not reduce(opened, CommandInvoked("tools", "")).state.tools_expanded
 
 
 def test_a_run_carries_its_clock_and_a_new_turn_clears_old_notices() -> None:

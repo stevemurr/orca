@@ -360,7 +360,7 @@ def test_each_kind_of_tool_has_its_own_quiet_glyph() -> None:
             ProgressItem("m", "files__list", "completed", kind="other"),
         ),
     )
-    state = replace(populated_state(), turns=(turn,))
+    state = replace(populated_state(), turns=(turn,), tools_expanded=True)
 
     rendered = plain(render_conversation(state, width=90), width=90)
 
@@ -368,3 +368,40 @@ def test_each_kind_of_tool_has_its_own_quiet_glyph() -> None:
     assert "✎  edit src/app.py" in rendered
     assert "$  run: pytest" in rendered
     assert "·  files__list" in rendered
+
+
+def test_a_run_of_tool_calls_folds_to_the_latest_and_a_count() -> None:
+    from orca.app.model import Activity
+
+    calls = tuple(
+        ProgressItem(f"c{n}", f"read file{n}.py", "completed", kind="read") for n in range(8)
+    )
+    turn = TurnState(
+        "run-1",
+        request="Read them",
+        progress=calls,
+        timeline=tuple(Activity(item.update_id) for item in calls),
+    )
+    folded = replace(populated_state(), turns=(turn,))
+    opened = replace(folded, tools_expanded=True)
+
+    quiet = plain(render_conversation(folded, width=90), width=90)
+    loud = plain(render_conversation(opened, width=90), width=90)
+
+    assert "read file7.py  ·  8 tool calls ›" in quiet
+    assert "read file0.py" not in quiet
+    assert "read file0.py" in loud and "read file7.py" in loud
+    assert "tool calls ›" not in loud
+
+
+def test_a_notice_shows_for_a_moment_and_then_goes() -> None:
+    from orca.app.model import Notice
+    from orca.tui.render import render_notice
+
+    said = replace(populated_state(), notices=(Notice("Approved: run: pytest", shown_at=10.0),))
+
+    fresh = render_notice(replace(said, clock=11.0))
+    stale = render_notice(replace(said, clock=13.5))
+
+    assert fresh is not None and "Approved: run: pytest" in plain(fresh, width=90)
+    assert stale is None

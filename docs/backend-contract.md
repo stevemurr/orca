@@ -248,7 +248,7 @@ which is the one failure this rule exists to prevent.
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
 | `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments`, `allowed_decisions` | Modal, and the run parks. `title` is what a person judges. From `arguments`: `argv` is shown as a shell-quoted command line; `path` with `content` is shown as the file, highlighted by its extension; `path` with `old` and `new` is shown as a diff. |
-| `approval.resolved` | `decision` | Dismisses it, and records the decision in the transcript where it was made. A run paused under the modal stays paused: send `run.paused` again after this, since orca reads a resolution as running. |
+| `approval.resolved` | `decision` | Dismisses it, and says the decision for a moment near the composer -- not in the transcript, which already shows the call it was about. A run paused under the modal stays paused: send `run.paused` again after this, since orca reads a resolution as running. |
 | `question.requested` | `question_id`, `prompt`, `options[]` | Inline above the composer; the next thing typed is the answer. `options` are the agent's guesses, shown numbered — a number picks one, anything else is sent as typed, and an empty answer is sent as "I am not answering". |
 | `question.resolved` | — | Dismisses it. |
 | `context.compacted` | `summary` | A note on the turn: the agent now works from a summary. User-visible on purpose; it is the honest explanation for a change in behaviour. |

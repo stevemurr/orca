@@ -32,6 +32,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("workspace", "show or switch the active workspace", "<path>"),
     CommandSpec("add", "reach one more folder from this conversation", "<path>"),
     CommandSpec("status", "show connection and run status"),
+    CommandSpec("tools", "show every tool call, or fold them again"),
     CommandSpec("help", "show commands and keyboard shortcuts"),
     CommandSpec("inspect", "open developer events and traces", developer_only=True),
     CommandSpec("quit", "leave; durable work keeps running"),

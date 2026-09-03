@@ -427,6 +427,8 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
                 _notice(state, "The workspace cannot change while a run is active.", "warning")
             )
         return Transition(state, (SwitchWorkspace(argument),))
+    if name == "tools":
+        return Transition(replace(state, tools_expanded=not state.tools_expanded))
     if name == "status":
         label = state.run_status.value.replace("_", " ")
         return Transition(_notice(state, f"{state.profile} · {state.workspace_path} · {label}"))
@@ -599,13 +601,13 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
 
     if kind == "approval.resolved":
-        # Into the transcript, at the point it was decided, rather than a notice that stays
-        # at the bottom after the run has moved on.
+        # Said once, near the composer, and gone: the decision is not part of what the run
+        # did, and the transcript already shows the call it was about.
         decided = replace(state, interaction=None, run_status=RunStatus.RUNNING)
         asked = state.interaction
         title = asked.title if asked is not None and asked.kind == "approval" else ""
         verdict = _decision_label(_string(payload, "decision"))
-        return Transition(_note(decided, "approval", f"{verdict}: {title}" if title else verdict))
+        return Transition(_notice(decided, f"{verdict}: {title}" if title else verdict))
 
     if kind == "question.resolved":
         return Transition(replace(state, interaction=None, run_status=RunStatus.RUNNING))
@@ -785,7 +787,7 @@ def _chosen_option(options: tuple[str, ...], text: str) -> str:
 
 
 def _notice(state: AppState, message: str, level: NoticeLevel = "info") -> AppState:
-    notices = (*state.notices[-3:], Notice(message, level))
+    notices = (*state.notices[-3:], Notice(message, level, shown_at=state.clock))
     return replace(state, notices=notices)
 
 

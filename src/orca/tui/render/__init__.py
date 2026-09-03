@@ -7,6 +7,7 @@ from orca.tui.render.chrome import (
     render_help,
     render_inspector,
     render_interaction,
+    render_notice,
 )
 from orca.tui.render.conversation import render_conversation, render_plan, render_review
 
@@ -18,6 +19,7 @@ __all__ = [
     "render_help",
     "render_inspector",
     "render_interaction",
+    "render_notice",
     "render_plan",
     "render_review",
 ]

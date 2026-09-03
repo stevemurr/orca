@@ -119,6 +119,22 @@ def render_command_menu(commands: tuple[CommandSpec, ...], selected: int) -> Ren
     return table
 
 
+#: How long a notice stays, by how much it matters. An error waits to be read; a decision
+#: that was just made needs only a glance.
+_NOTICE_SECONDS = {"info": 3.0, "warning": 6.0, "error": 10.0}
+
+
+def render_notice(state: AppState) -> Text | None:
+    """The latest notice still within its time, for the line above the composer."""
+    if not state.notices:
+        return None
+    notice = state.notices[-1]
+    if state.clock - notice.shown_at >= _NOTICE_SECONDS[notice.level]:
+        return None
+    style = {"info": MUTED, "warning": WARNING, "error": ERROR}[notice.level]
+    return Text(f"· {notice.message}", style=style, overflow="ellipsis", no_wrap=True)
+
+
 def render_footer(state: AppState) -> Text:
     left = {
         "conversation": f"{state.mode} · {state.policy}",
@@ -159,6 +175,7 @@ def render_help(*, developer: bool = False) -> RenderableType:
     keys.add_row("Shift+Enter", "new line")
     keys.add_row("Esc", "return from a view; pause from chat")
     keys.add_row("Ctrl+P", "command palette")
+    keys.add_row("Ctrl+T", "show every tool call, or fold them again")
     return Group(Text("Commands", style="bold"), table, Text(""), Text("Keys", style="bold"), keys)
 
 
