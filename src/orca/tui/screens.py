@@ -73,18 +73,35 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
 
 
 def nested_threads(rows: tuple[ThreadSummary, ...]) -> tuple[ThreadSummary, ...]:
-    """Each delegated thread directly under the thread that delegated it.
+    """Each delegated thread directly under the thread that delegated it, to any depth.
 
     The listing arrives flat, newest first. A child whose parent is not listed stays where
-    it was, still marked as a child, rather than vanishing.
+    it was, still marked as a child, rather than vanishing. A delegated thread can delegate
+    in turn, so the walk descends from each root rather than stopping at one level.
     """
     listed = {row.thread_id for row in rows}
+    children: dict[str, list[ThreadSummary]] = {}
+    for row in rows:
+        if row.parent and row.parent in listed:
+            children.setdefault(row.parent, []).append(row)
     ordered: list[ThreadSummary] = []
+    seen: set[str] = set()
+
+    def walk(row: ThreadSummary) -> None:
+        # A cycle in the listing is a backend fault; refusing to loop on it beats a crash.
+        if row.thread_id in seen:
+            return
+        seen.add(row.thread_id)
+        ordered.append(row)
+        for child in children.get(row.thread_id, ()):
+            walk(child)
+
     for row in rows:
         if row.parent and row.parent in listed:
             continue
-        ordered.append(row)
-        ordered.extend(child for child in rows if child.parent == row.thread_id)
+        walk(row)
+    # Every row in a cycle has a listed parent, so none is a root; list them rather than lose them.
+    ordered.extend(row for row in rows if row.thread_id not in seen)
     return tuple(ordered)
 
 

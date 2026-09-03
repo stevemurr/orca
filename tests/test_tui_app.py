@@ -419,6 +419,22 @@ def test_the_picker_nests_a_delegated_thread_under_its_parent() -> None:
     ]
 
 
+def test_the_picker_nests_a_delegation_chain_to_any_depth() -> None:
+    rows = (
+        ThreadSummary("grandchild", parent="child"),
+        ThreadSummary("child", parent="parent"),
+        ThreadSummary("sibling", parent="parent"),
+        ThreadSummary("parent"),
+    )
+
+    assert [row.thread_id for row in nested_threads(rows)] == [
+        "parent",
+        "child",
+        "grandchild",
+        "sibling",
+    ]
+
+
 async def test_typing_a_slash_opens_a_menu_that_enter_runs_and_tab_completes() -> None:
     app = OrcaApp(FakeBackend())
 
