@@ -473,3 +473,26 @@ async def test_typing_a_slash_opens_a_menu_that_enter_runs_and_tab_completes() -
         await pilot.press("enter")
         await pilot.pause()
         assert composer.text == "/mode "
+
+
+async def test_a_render_between_a_keystroke_and_its_notice_keeps_the_text() -> None:
+    """The clock renders many times a second while a run goes. A keystroke the widget has
+    and the model has not yet heard about used to be overwritten by the model's stale
+    draft on the next render, with the cursor sent to the start."""
+    app = OrcaApp(FakeBackend())
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.insert("abc")  # the widget has it; its Changed notice is still queued
+        app._render_model()  # pyright: ignore[reportPrivateUsage]
+
+        assert composer.text == "abc"
+        assert composer.cursor_location == (0, 3)
+
+        # And a submit that clears the draft still clears the widget.
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert composer.text == ""

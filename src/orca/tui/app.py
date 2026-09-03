@@ -259,6 +259,11 @@ class OrcaApp(App[None]):
         #: Which row of the `/` menu is highlighted. Widget state, not model state: it is
         #: about where a cursor is, and it resets whenever the draft changes.
         self._menu_index: int = 0
+        #: The last draft the composer reported. The composer is reloaded from the model
+        #: only when the model changed the draft on its own -- a submit clearing it -- and
+        #: never because a keystroke had not reached the model yet: a render between the
+        #: two used to put the model's stale draft back and the cursor at the start.
+        self._reported_draft: str = ""
 
     @override
     def compose(self) -> ComposeResult:
@@ -381,8 +386,7 @@ class OrcaApp(App[None]):
             # Enter on the menu runs the highlighted command. One that takes an argument
             # is put in the composer instead, by `invoke_command`, for the person to finish.
             chosen = commands[self._menu_index % len(commands)]
-            # The model first: a render after the command reloads the draft it holds,
-            # and the widget's own change notice arrives later than that.
+            self._reported_draft = ""
             self.apply_model_action(ComposerChanged(""))
             self.query_one(Composer).replace_text("")
             self.invoke_command(chosen.name)
@@ -393,6 +397,7 @@ class OrcaApp(App[None]):
     def composer_changed(self, message: TextArea.Changed) -> None:
         composer = cast(Composer, message.text_area)
         composer.fit_height()
+        self._reported_draft = composer.text
         if composer.text != self.model.composer_draft:
             self.apply_model_action(ComposerChanged(composer.text))
 
@@ -440,8 +445,11 @@ class OrcaApp(App[None]):
         interaction.update(inline_interaction or "")
 
         composer = self.query_one(Composer)
-        if composer.text != self.model.composer_draft:
-            composer.load_text(self.model.composer_draft)
+        if self.model.composer_draft != self._reported_draft:
+            # The model changed the draft itself; the widget follows. A widget ahead of the
+            # model -- a keystroke whose notice is still queued -- is left alone.
+            self._reported_draft = self.model.composer_draft
+            composer.replace_text(self.model.composer_draft)
         composer.disabled = self.model.booting or self.model.submitting
         composer.placeholder = (
             "Answer the agent…"
