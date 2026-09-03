@@ -105,9 +105,9 @@ _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 #: How far the shine on a working tool row moves per second, in cells, and how wide it is.
 _SHINE_SPEED = 24.0
 _SHINE_WIDTH = 7
-#: The lit row's own colour, a deeper shade of the accent; and the band's centre, a lighter
-#: one. Neither is white, and neither is the grey a finished row wears.
-SHINE_BASE = "#4f9dc6"
+#: The lit row's grey, a shade lighter than a finished row's so bold shows; and the band's
+#: centre, a lighter accent than its edges.
+SHINE_BASE = "#aab6c2"
 SHINE_EDGE = "#b3e4fc"
 
 
@@ -118,9 +118,9 @@ def shimmer(text: str, clock: float) -> Text:
     the same words, muted, with a few brighter cells that move left to right and wrap. Pure
     in the clock, so a still frame is a still frame and a test can pin one.
     """
-    # Bold, in a deeper shade of the accent rather than the muted grey the finished rows
-    # use or the plain text colour, which reads as white: a lit row is the one being
-    # watched, and it is lit in the accent's own family, the band a lighter shade of it.
+    # Bold grey: the same family as the finished rows, a shade lighter so the weight shows
+    # in terminals where bold on the muted grey reads as no change. Not white, and not the
+    # accent; the band that passes over it is the accent.
     line = Text(text, style=f"bold {SHINE_BASE}")
     if not text:
         return line
