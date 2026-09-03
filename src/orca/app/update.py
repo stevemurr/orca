@@ -34,6 +34,7 @@ from orca.app.model import (
     Activity,
     AppState,
     ArtifactOffer,
+    Choice,
     InteractionState,
     Narration,
     Notice,
@@ -165,6 +166,8 @@ def reduce(state: AppState, action: Action) -> Transition:
                 workspace_id=action.workspace_id,
                 workspace_name=action.workspace_name,
                 workspace_path=action.workspace_path,
+                modes=action.modes,
+                policies=action.policies,
                 **conversation,
             )
         )
@@ -419,13 +422,9 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
         # stream says so. Only the thread is needed, and the backend makes one if there is none.
         return Transition(state, (AddFolder(state.thread_id, argument),))
     if name == "mode":
-        if not argument:
-            return Transition(_notice(state, f"mode: {state.mode}"))
-        return Transition(replace(state, mode=argument))
+        return _choose(state, name, argument, state.mode, state.modes)
     if name == "permissions":
-        if not argument:
-            return Transition(_notice(state, f"permissions: {state.policy}"))
-        return Transition(replace(state, policy=argument))
+        return _choose(state, name, argument, state.policy, state.policies)
     if name == "workspace":
         if not argument:
             return Transition(_notice(state, f"workspace: {state.workspace_path or 'none'}"))
@@ -444,6 +443,31 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
             return Transition(_notice(state, "No run is active."))
         return Transition(state, (SendRunCommand(state.active_run_id, lifecycle()),))
     return Transition(_notice(state, f"Unknown command: /{name}", "warning"))
+
+
+def _choose(
+    state: AppState, name: str, argument: str, current: str, offered: tuple[Choice, ...]
+) -> Transition:
+    """Set `/mode` or `/permissions`. Asked with nothing, it says what the value is and what
+    else it could be; given a value the backend did not offer, it says what it did, since
+    a typo sent on would fail at the backend with a worse message or, worse, not fail."""
+    names = tuple(choice.name for choice in offered)
+    if not argument:
+        others = ", ".join(value for value in names if value != current)
+        return Transition(
+            _notice(state, f"{name}: {current}" + (f" · also {others}" if others else ""))
+        )
+    if names and argument not in names:
+        return Transition(
+            _notice(
+                state,
+                f"{name}: the backend does not offer {argument!r}; it offers {', '.join(names)}.",
+                "warning",
+            )
+        )
+    if name == "mode":
+        return Transition(replace(state, mode=argument))
+    return Transition(replace(state, policy=argument))
 
 
 def _event(state: AppState, event: TaskEvent) -> Transition:
@@ -588,6 +612,7 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             risk=_string(payload, "risk"),
             allowed_decisions=decisions,
             snippets=snippets,
+            grant=_string(payload, "grant"),
         )
         return Transition(
             replace(state, interaction=interaction, run_status=RunStatus.AWAITING_APPROVAL)

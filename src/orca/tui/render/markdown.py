@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
-from typing import override
+from typing import ClassVar, override
 
 from rich.console import Console, ConsoleOptions, RenderResult
-from rich.markdown import Markdown
+from rich.markdown import CodeBlock, Markdown, MarkdownElement
+from rich.syntax import Syntax
 
-from orca.tui.render.theme import MARKDOWN_THEME
+from orca.tui.render.code import CODE_THEME
+from orca.tui.render.theme import CODE_BACKGROUND, MARKDOWN_THEME
 
 _FLAT_HEADING = re.compile(r"#{1,6}[ \t]+")
 _FLAT_ORDERED_ITEM = re.compile(r"\d{1,3}\.[ \t]+\S")
@@ -49,8 +51,34 @@ _INLINE_CODE = re.compile(r"(?P<ticks>`+)(?P<body>[^\n]*?)(?P=ticks)")
 _CODE_FENCE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
 
 
+class AnswerCodeBlock(CodeBlock):
+    """A fenced block on the shell's surface, in terminal colours, like a tool's snippet.
+
+    Rich's own block brings a colour scheme of its own -- monokai, an olive ground -- and
+    a line of padding above and below; in a transcript that is a window pasted in, not a
+    paragraph of code.
+    """
+
+    @override
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield Syntax(
+            str(self.text).rstrip(),
+            self.lexer_name,
+            theme=CODE_THEME,
+            background_color=CODE_BACKGROUND,
+            word_wrap=True,
+            padding=(0, 1),
+        )
+
+
 class AnswerMarkdown(Markdown):
     """Markdown whose semantic styles remain legible inside Textual's console theme."""
+
+    elements: ClassVar[dict[str, type[MarkdownElement]]] = {
+        **Markdown.elements,
+        "fence": AnswerCodeBlock,
+        "code_block": AnswerCodeBlock,
+    }
 
     @override
     def __rich_console__(

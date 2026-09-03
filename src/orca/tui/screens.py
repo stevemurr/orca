@@ -14,22 +14,25 @@ from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from orca.app.commands import Choices
 from orca.backend import ThreadSummary
 from orca.tui.render import render_help
+from orca.tui.render.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING
 
 
 class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss", "Close", show=False)]
 
-    def __init__(self, *, developer: bool = False) -> None:
+    def __init__(self, *, developer: bool = False, choices: Choices | None = None) -> None:
         super().__init__()
         self._developer: bool = developer
+        self._choices: Choices = choices or {}
 
     @override
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-card", id="help-card"):
-            yield Static(render_help(developer=self._developer))
-            yield Static("Esc close", classes="modal-hint")
+            yield Static(render_help(developer=self._developer, choices=self._choices))
+            yield Static("esc close", classes="modal-hint")
 
 
 class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
@@ -55,7 +58,7 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
                     *(Option(_thread_prompt(row), id=row.thread_id) for row in self._rows),
                     id="thread-options",
                 )
-            yield Static("Enter continue  ·  Esc close", classes="modal-hint")
+            yield Static("enter continue   esc close", classes="modal-hint")
 
     def on_mount(self) -> None:
         options = self.query(OptionList)
@@ -106,6 +109,8 @@ def nested_threads(rows: tuple[ThreadSummary, ...]) -> tuple[ThreadSummary, ...]
 
 
 def _thread_prompt(row: ThreadSummary) -> Text:
+    """Two lines: a mark and the title, then how it ended, when, and where, under the
+    title. The mark says at a glance what the word says on the next line."""
     title = row.title or "Untitled conversation"
     status = (row.latest_run_status or "idle").replace("_", " ")
     updated = _display_timestamp(row.updated_at)
@@ -114,10 +119,25 @@ def _thread_prompt(row: ThreadSummary) -> Text:
         parts.append(updated)
     if row.folder:
         parts.append(row.folder)
-    prompt = Text("↳ " if row.parent else "", style="dim")
+    lead = "↳ " if row.parent else ""
+    mark, style = _status_mark(status)
+    prompt = Text(lead, style="dim")
+    prompt.append(f"{mark} ", style=style)
     prompt.append(title, style="bold")
-    prompt.append("\n" + "  ·  ".join(parts), style="dim")
+    prompt.append("\n" + " " * (len(lead) + 2) + "  ".join(parts), style="dim")
     return prompt
+
+
+def _status_mark(status: str) -> tuple[str, str]:
+    if status in {"running", "queued"}:
+        return "●", ACCENT
+    if status == "completed":
+        return "✓", SUCCESS
+    if status in {"failed", "blocked", "cancelled"}:
+        return "✗", ERROR
+    if status.startswith("awaiting") or status == "paused":
+        return "◐", WARNING
+    return "○", MUTED
 
 
 def _display_timestamp(value: str) -> str:

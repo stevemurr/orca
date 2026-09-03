@@ -29,7 +29,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Protocol
 
-from orca.app.model import TaskEvent, ThreadReplay
+from orca.app.model import Choice, TaskEvent, ThreadReplay
 
 
 class BackendError(RuntimeError):
@@ -65,6 +65,11 @@ class SessionInfo:
     #: the real one is the client's most dangerous possible lie -- and so is a subfolder: the
     #: backend runs in the registered folder, so that is the folder shown. (2026-09-03)
     workspace_path: str
+    #: The values `/mode` and `/permissions` accept, in the backend's own words, when it
+    #: has said. Offered as completions and shown in help, and a value outside the list is
+    #: refused before it is sent. Empty means anything typed is passed through as before.
+    modes: tuple[Choice, ...] = ()
+    policies: tuple[Choice, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,10 +86,10 @@ class RunRequest:
     thread_id: str | None
     workspace_id: str
     #: How much effort to spend. A backend-defined string orca passes through unread; the
-    #: person sets it with `/mode` and it defaults to `auto`.
+    #: person sets it with `/mode` and it defaults to `normal`.
     mode: str
     #: How much to ask about. A backend-defined string orca passes through unread; the person
-    #: sets it with `/permissions` and it defaults to `safe`.
+    #: sets it with `/permissions` and it defaults to `ask`.
     policy: str
 
 

@@ -6,7 +6,6 @@ from rich import box
 from rich.console import Group, RenderableType
 from rich.padding import Padding
 from rich.panel import Panel
-from rich.rule import Rule
 from rich.styled import Styled
 from rich.table import Table
 from rich.text import Text
@@ -16,6 +15,7 @@ from orca.app.model import (
     AppState,
     Narration,
     ProgressItem,
+    RunStatus,
     Segment,
     TurnNote,
     TurnState,
@@ -30,26 +30,13 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
     rows: list[RenderableType] = []
     if not state.turns:
         rows.extend(welcome(state, width=width))
-    for turn_index, turn in enumerate(state.turns):
-        if turn_index:
-            rows.append(Text(""))
-        request = Text(turn.request or "Submitting…")
-        rows.append(
-            Panel(
-                request,
-                title=Text("YOU", style=f"bold {ACCENT}"),
-                title_align="left",
-                border_style=CALLOUT,
-                box=box.ROUNDED,
-                padding=(0, 1),
-            )
-        )
+    for turn in state.turns:
+        rows.append(_request_block(turn.request or "Submitting…"))
         if turn.plan and not _pinned(state, turn):
             # Intent frames activity; the active step is the checklist's only prominent line.
             # The active turn's plan is pinned above the composer instead, by `render_plan`.
             rows.append(Padding(_plan_checklist(turn), (0, 1)))
         by_id = {item.update_id: item for item in turn.progress}
-        narrated = False
         pending: list[ProgressItem] = []
         for segment in (*_timeline(turn), None):
             if isinstance(segment, Activity):
@@ -66,9 +53,6 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 rows.append(Padding(_activity_table(pending, state, live=tail), (1, 1)))
                 pending = []
             if isinstance(segment, Narration):
-                if not narrated:
-                    rows.append(Rule(style=CALLOUT))
-                narrated = True
                 rows.append(Padding(answer_markdown(segment.text), (0, 1)))
             elif isinstance(segment, TurnNote):
                 rows.append(Padding(_note_row(segment), (0, 1)))
@@ -104,7 +88,7 @@ def render_plan(state: AppState, *, width: int) -> RenderableType | None:
     turn = state.turns[-1]
     if not _pinned(state, turn):
         return None
-    return Group(Text("PLAN", style=f"bold {MUTED}"), _plan_checklist(turn))
+    return Group(Text("Plan", style=f"bold {MUTED}"), _plan_checklist(turn))
 
 
 def _pinned(state: AppState, turn: TurnState) -> bool:
@@ -153,6 +137,9 @@ def _working(state: AppState) -> Text:
     text = Text.assemble((f"{frame} ", f"bold {ACCENT}"), (label, f"bold {ACCENT}"))
     if state.run_started_at > 0:
         text.append(f" · {_elapsed(max(0.0, state.clock - state.run_started_at))}", style=MUTED)
+    if state.run_status in {RunStatus.QUEUED, RunStatus.RUNNING}:
+        # Where an editor's agent says how to interrupt: beside the spinner, not in help.
+        text.append("   esc to pause", style=MUTED)
     return text
 
 
@@ -176,11 +163,11 @@ def render_review(state: AppState, *, width: int) -> RenderableType:
     turn = state.turns[-1]
     rows: list[RenderableType] = [Text("Review", style=f"bold {ACCENT}"), Text("")]
     if turn.answer:
-        rows.extend((Text("RESULT", style=f"bold {MUTED}"), answer_markdown(turn.answer)))
+        rows.extend((Text("Result", style=f"bold {MUTED}"), answer_markdown(turn.answer)))
     else:
         rows.append(Text("The current answer is still provisional.", style=MUTED))
     if turn.artifacts:
-        rows.extend((Text(""), Text("ARTIFACTS", style=f"bold {MUTED}")))
+        rows.extend((Text(""), Text("Artifacts", style=f"bold {MUTED}")))
         artifacts = Table.grid(padding=(0, 2))
         artifacts.add_column(no_wrap=True, style=ACCENT)
         artifacts.add_column(ratio=1)
@@ -285,9 +272,12 @@ def _activity_look(item: ProgressItem) -> tuple[str, str, str]:
 
 
 def welcome(state: AppState, *, width: int) -> list[RenderableType]:
-    title = Text()
-    title.append("›_ ", style=f"bold {ACCENT}")
-    title.append("Ready", style="bold")
+    """The card a session opens on: where it is, what it talks to, and how to begin."""
+    # The header already says orca; the card says where this conversation stands.
+    title = Table.grid(expand=True)
+    title.add_column(ratio=1)
+    title.add_column(justify="right", style=MUTED)
+    title.add_row(Text("New conversation", style="bold"), state.profile)
     details = Table.grid(padding=(0, 2))
     details.add_column(width=11, style=MUTED, no_wrap=True)
     details.add_column(ratio=1, overflow="fold")
@@ -296,21 +286,34 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
         details.add_row("folder", folder)
     details.add_row("connection", state.endpoint or "resolving…")
     details.add_row("session", f"{state.mode} · {state.policy}")
+    how = Text(style=MUTED)
+    how.append("Type a message to start. ")
+    how.append("/", style=ACCENT)
+    how.append(" lists the commands, ")
+    how.append("/threads", style=ACCENT)
+    how.append(" continues an earlier conversation, and Shift+Enter adds a line.")
     panel = Panel(
-        Group(title, Text(""), details),
+        Group(title, Text(""), details, Text(""), how),
         box=box.ROUNDED,
         border_style=CALLOUT,
         padding=(0, 1),
         width=max(1, width),
     )
-    tip = Text.assemble(("Tip: ", MUTED), ("/help", ACCENT), (" lists every command", MUTED))
-    return [panel, tip]
+    return [panel]
 
 
-#: A box with a left edge and nothing else, for words the person sent while the run was
-#: going: quoted, the way a reply quotes what it answers, and quieter than the request that
-#: opened the turn.
+#: The person's words sit behind a bar; the agent's never do. This is the request that
+#: opened the turn: a heavy bar in the accent, and the words bold. No box and no label --
+#: the bar is the label.
+_BAR = box.Box("    \n▌   \n▌   \n▌   \n▌   \n▌   \n▌   \n    \n")
+
+#: The same bar, thin and grey, for words the person sent while the run was going:
+#: quoted, the way a reply quotes what it answers, and quieter than the request.
 _QUOTE = box.Box("    \n▎   \n▎   \n▎   \n▎   \n▎   \n▎   \n    \n")
+
+
+def _request_block(text: str) -> RenderableType:
+    return Panel(Text(text, style="bold"), box=_BAR, border_style=ACCENT, padding=(0, 1))
 
 
 def _note_row(note: TurnNote) -> RenderableType:
@@ -319,7 +322,7 @@ def _note_row(note: TurnNote) -> RenderableType:
             Styled(answer_markdown(note.text), f"italic {MUTED}"),
             box=_QUOTE,
             border_style=MUTED,
-            title=Text("you · mid-run", style=f"italic {MUTED}"),
+            title=Text("you, mid-run", style=f"italic {MUTED}"),
             title_align="left",
             padding=(0, 1),
         )

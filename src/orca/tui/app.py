@@ -11,6 +11,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.command import Provider
 from textual.containers import Horizontal, Vertical
+from textual.theme import Theme
 from textual.widgets import ContentSwitcher, Static, TextArea
 
 from orca.app.actions import (
@@ -32,7 +33,7 @@ from orca.app.actions import (
     ThreadSelected,
     ViewportChanged,
 )
-from orca.app.commands import CommandSpec, spec_for, suggest
+from orca.app.commands import Choices, Suggestion, spec_for, suggest
 from orca.app.model import Activity, AppState, ViewId
 from orca.app.update import (
     AddFolder,
@@ -57,10 +58,39 @@ from orca.tui.render import (
     render_notice,
     render_plan,
 )
+from orca.tui.render.theme import (
+    ACCENT,
+    BACKGROUND,
+    ERROR,
+    MUTED,
+    PANEL,
+    SUCCESS,
+    SURFACE,
+    TEXT,
+    WARNING,
+)
 from orca.tui.screens import HelpScreen, ThreadPickerScreen
 from orca.tui.views import ConversationView, InspectorView, ReviewView
 from orca.tui.views.base import RenderedView
 from orca.tui.widgets import Composer
+
+#: The renderer's tokens, given to Textual as well, so everything it draws on its own --
+#: scrollbars, a list's chosen row, the text cursor -- is in the same palette as the
+#: transcript rather than in its stock blue.
+ORCA_THEME = Theme(
+    name="orca",
+    primary=ACCENT,
+    secondary=MUTED,
+    accent=ACCENT,
+    warning=WARNING,
+    error=ERROR,
+    success=SUCCESS,
+    foreground=TEXT,
+    background=BACKGROUND,
+    surface=SURFACE,
+    panel=PANEL,
+    dark=True,
+)
 
 
 class OrcaApp(App[None]):
@@ -96,7 +126,7 @@ class OrcaApp(App[None]):
         width: 100%;
         height: 2;
         padding: 0 1;
-        border-bottom: solid $surface-lighten-2;
+        border-bottom: solid $surface-lighten-1;
     }
 
     #view-host {
@@ -118,8 +148,8 @@ class OrcaApp(App[None]):
         width: 100%;
         height: auto;
         max-height: 9;
-        padding: 0 1;
-        border-top: solid $surface-lighten-2;
+        padding: 0 2;
+        border-top: solid $surface-lighten-1;
         display: none;
     }
 
@@ -130,7 +160,7 @@ class OrcaApp(App[None]):
     #notice {
         width: 100%;
         height: 1;
-        padding: 0 1;
+        padding: 0 2;
         display: none;
     }
 
@@ -142,8 +172,8 @@ class OrcaApp(App[None]):
         width: 100%;
         height: auto;
         max-height: 9;
-        padding: 0 1;
-        border-top: solid $surface-lighten-2;
+        padding: 0 2;
+        border-top: solid $surface-lighten-1;
         display: none;
     }
 
@@ -154,7 +184,7 @@ class OrcaApp(App[None]):
     #interaction {
         width: 100%;
         height: auto;
-        max-height: 10;
+        max-height: 14;
         padding: 0 1;
         display: none;
     }
@@ -163,18 +193,20 @@ class OrcaApp(App[None]):
         display: block;
     }
 
+    /* The input is a box, as an editor's agent draws it: the one bordered thing on the
+       screen, so the eye knows where to type without a label saying so. */
     #composer-frame {
         width: 100%;
         height: auto;
         min-height: 3;
         max-height: 9;
         padding: 0 1;
-        border-top: solid $surface-lighten-2;
+        border: round $surface-lighten-2;
         background: $background;
     }
 
     #composer-prompt {
-        width: 3;
+        width: 2;
         height: 100%;
         padding: 0 0;
         color: $primary;
@@ -183,10 +215,10 @@ class OrcaApp(App[None]):
     }
 
     Composer {
-        width: 100%;
-        height: 3;
-        min-height: 3;
-        max-height: 9;
+        width: 1fr;
+        height: 1;
+        min-height: 1;
+        max-height: 7;
         border: none;
         padding: 0 0;
         background: $background;
@@ -200,14 +232,14 @@ class OrcaApp(App[None]):
     #app-footer {
         width: 100%;
         height: 1;
-        padding: 0 1;
+        padding: 0 2;
         color: $text-muted;
         background: $background;
     }
 
     HelpScreen, ThreadPickerScreen {
         align: center middle;
-        background: rgba(0,0,0,0.45);
+        background: rgba(0,0,0,0.55);
     }
 
     .modal-card {
@@ -215,7 +247,7 @@ class OrcaApp(App[None]):
         max-width: 88;
         max-height: 88%;
         padding: 1 2;
-        border: round $surface-lighten-3;
+        border: round $surface-lighten-2;
         background: $surface;
     }
 
@@ -244,8 +276,22 @@ class OrcaApp(App[None]):
     #thread-options {
         height: 1fr;
         border: none;
+        padding: 0;
         background: $surface;
         scrollbar-size-vertical: 1;
+    }
+
+    /* The chosen row is a tint of the accent, not a block of it: the words stay in the
+       text colour and the tint says which row, the way a selection does. */
+    #thread-options > .option-list--option-highlighted,
+    #thread-options:focus > .option-list--option-highlighted {
+        background: $primary 18%;
+        color: $text;
+        text-style: none;
+    }
+
+    #thread-options:focus {
+        background-tint: $foreground 0%;
     }
 
     .modal-hint {
@@ -256,6 +302,8 @@ class OrcaApp(App[None]):
 
     def __init__(self, backend: TerminalBackend, *, initial: AppState | None = None) -> None:
         super().__init__()
+        self.register_theme(ORCA_THEME)
+        self.theme = ORCA_THEME.name  # pyright: ignore[reportUnannotatedClassAttribute]
         self.backend: TerminalBackend = backend
         self.model: AppState = initial or AppState()
         self._closing: bool = False
@@ -349,18 +397,33 @@ class OrcaApp(App[None]):
     def invoke_command(self, name: str, argument: str = "") -> None:
         spec = spec_for(name)
         if spec is not None and spec.argument and not argument:
-            composer = self.query_one(Composer)
-            composer.replace_text(f"/{name} ")
-            composer.focus()
+            self._put_in_composer(f"/{name} ")
             return
         self.apply_model_action(CommandInvoked(name, argument))
 
-    def _suggestions(self) -> tuple[CommandSpec, ...]:
-        return suggest(self.model.composer_draft, developer=self.model.developer)
+    def _put_in_composer(self, text: str) -> None:
+        """Put `text` in the composer as if the person had typed it: the widget, the model
+        and the menu all see it at once. Loading text into the widget alone does not raise
+        `Changed`, so the model would not know, and a menu for the draft would not open."""
+        composer = self.query_one(Composer)
+        composer.replace_text(text)
+        composer.focus()
+        self._reported_draft = text
+        if text != self.model.composer_draft:
+            self.apply_model_action(ComposerChanged(text))
+
+    def _choices(self) -> Choices:
+        return {"mode": self.model.modes, "permissions": self.model.policies}
+
+    def _suggestions(self) -> tuple[Suggestion, ...]:
+        return suggest(
+            self.model.composer_draft, developer=self.model.developer, choices=self._choices()
+        )
 
     def _render_menu(self) -> None:
         menu = self.query_one("#command-menu", Static)
         commands = self._suggestions()
+        self.query_one(Composer).menu_open = bool(commands)
         if not commands:
             menu.set_class(False, "visible")
             menu.update("")
@@ -381,21 +444,24 @@ class OrcaApp(App[None]):
         commands = self._suggestions()
         if commands:
             chosen = commands[self._menu_index % len(commands)]
-            self.query_one(Composer).replace_text(
-                f"/{chosen.name}" + (" " if chosen.argument else "")
-            )
+            self._put_in_composer(chosen.insert)
 
     @on(Composer.Submitted)
     def composer_submitted(self, message: Composer.Submitted) -> None:
         commands = self._suggestions()
         if commands:
-            # Enter on the menu runs the highlighted command. One that takes an argument
-            # is put in the composer instead, by `invoke_command`, for the person to finish.
+            # Enter on the menu runs the highlighted row. One that still needs a value is
+            # put in the composer instead, for the person to finish -- and the menu goes on
+            # to the values the backend accepts, when it has said what they are.
             chosen = commands[self._menu_index % len(commands)]
             self._reported_draft = ""
             self.apply_model_action(ComposerChanged(""))
-            self.query_one(Composer).replace_text("")
-            self.invoke_command(chosen.name)
+            composer = self.query_one(Composer)
+            composer.replace_text("")
+            if chosen.runnable:
+                self.apply_model_action(ComposerSubmitted(chosen.insert))
+            else:
+                self._put_in_composer(chosen.insert)
             return
         self.apply_model_action(ComposerSubmitted(message.text))
 
@@ -512,7 +578,9 @@ class OrcaApp(App[None]):
                     exit_on_error=False,
                 )
             case OpenHelp():
-                self.push_screen(HelpScreen(developer=self.model.developer))
+                self.push_screen(
+                    HelpScreen(developer=self.model.developer, choices=self._choices())
+                )
             case OpenThreads():
                 self.run_worker(
                     self._open_threads(),
@@ -571,6 +639,8 @@ class OrcaApp(App[None]):
                 workspace_id=info.workspace_id,
                 workspace_name=info.workspace_name,
                 workspace_path=info.workspace_path,
+                modes=info.modes,
+                policies=info.policies,
             )
         )
         if self.model.thread_id and not self.model.turns:
@@ -633,6 +703,8 @@ class OrcaApp(App[None]):
                 workspace_id=info.workspace_id,
                 workspace_name=info.workspace_name,
                 workspace_path=info.workspace_path,
+                modes=info.modes,
+                policies=info.policies,
                 reset_conversation=True,
             )
         )

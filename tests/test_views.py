@@ -192,7 +192,7 @@ def test_markdown_headings_keep_visible_semantic_styling() -> None:
     state = populated_state()
     turn = replace(
         state.turns[-1],
-        answer="### Findings\n\n- One result",
+        answer="# Findings\n\n- One result",
         provisional_answer="",
         status="completed",
     )
@@ -278,7 +278,7 @@ def test_the_footer_names_the_folder_and_what_the_conversation_reaches_beyond_it
 
     rendered = plain(render_footer(state), width=100)
 
-    assert "~/Code/orca  + orca, lib  ·  auto · safe" in rendered
+    assert "~/Code/orca + orca, lib   normal · ask" in rendered
     assert "~/Code/orca" not in plain(render_header(state, width=100), width=100)
 
 
@@ -475,12 +475,12 @@ def test_an_approval_is_asked_at_the_end_of_its_turn_and_leaves_once_decided() -
     asked = plain(render_conversation(state, width=90), width=90)
     assert asked.index("Building the terminal shell") < asked.index("Run the tests?")
     assert "$ pytest -q" in asked
-    assert "1 approve once" in asked and "2 always allow" in asked and "3 reject" in asked
+    assert "Approve once" in asked and "Always allow" in asked and "Reject" in asked
 
     decided = replace(state, interaction=None, run_status=RunStatus.RUNNING)
     rendered = plain(render_conversation(decided, width=90), width=90)
     assert "Run the tests?" not in rendered
-    assert "1 approve once" not in rendered
+    assert "Approve once" not in rendered
 
 
 def test_a_message_sent_mid_run_is_quoted_in_the_transcript_where_it_arrived() -> None:
@@ -501,7 +501,7 @@ def test_a_message_sent_mid_run_is_quoted_in_the_transcript_where_it_arrived() -
 
     rendered = plain(render_conversation(state, width=90), width=90)
 
-    assert "you · mid-run" in rendered
+    assert "you, mid-run" in rendered
     assert "▎" in rendered
     steer = rendered.index("Use the new tokenizer")
     assert rendered.index("read parser.py") < steer < rendered.index("Switching.")

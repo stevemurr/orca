@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orca.app.model import TaskEvent, ThreadReplay, ViewId
+from orca.app.model import Choice, TaskEvent, ThreadReplay, ViewId
 from orca.backend import CommandOutcome
 
 
@@ -17,6 +17,8 @@ class Connected:
     workspace_name: str
     workspace_path: str
     reset_conversation: bool = False
+    modes: tuple[Choice, ...] = ()
+    policies: tuple[Choice, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

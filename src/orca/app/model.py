@@ -175,6 +175,10 @@ class InteractionState:
     #: For an approval: a decision has been sent and not yet answered. The choices are
     #: shown again if the send fails, so the person can try again.
     sending: bool = False
+    #: For an approval: what answering "always" would cover, in the backend's words --
+    #: `git commands`, `file writes` -- so the choice says its own scope. Empty when the
+    #: backend did not say.
+    grant: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +193,15 @@ class Notice:
     message: str
     level: NoticeLevel = "info"
     shown_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class Choice:
+    """One value a setting may take, as the backend advertised it: the word, and what it
+    means, so a menu can show both and the pick is made on the meaning."""
+
+    name: str
+    summary: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,8 +233,11 @@ class AppState:
     thread_id: str | None = None
     active_run_id: str | None = None
     cursor: int = 0
-    mode: str = "auto"
-    policy: str = "safe"
+    mode: str = "normal"
+    policy: str = "ask"
+    #: What the backend said `mode` and `policy` may be; empty when it did not say.
+    modes: tuple[Choice, ...] = ()
+    policies: tuple[Choice, ...] = ()
     run_status: RunStatus = RunStatus.IDLE
     turns: tuple[TurnState, ...] = ()
     interaction: InteractionState | None = None

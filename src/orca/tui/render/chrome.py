@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from orca.app.commands import CommandSpec, visible_commands
+from orca.app.commands import Choices, Suggestion, argument_label, visible_commands
 from orca.app.model import AppState, RunStatus, Usage
 from orca.tui.render.code import code_block
 from orca.tui.render.theme import (
@@ -61,34 +61,33 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
     if interaction.summary:
         rows.append(Text(interaction.summary, style=MUTED))
     if interaction.command:
-        rows.append(Text(f"$ {interaction.command}", style=WARNING, overflow="fold"))
+        rows.append(Text(""))
+        rows.append(Text.assemble(("$ ", MUTED), (interaction.command, "bold"), overflow="fold"))
     for snippet in interaction.snippets:
         rows.append(Text(snippet.title, style=f"bold {MUTED}"))
         rows.append(code_block(snippet, lines=_APPROVAL_LINES, width=max(1, width - 4)))
-    if interaction.options:
-        for index, option in enumerate(interaction.options, start=1):
-            rows.append(Text.assemble((f"{index}", f"bold {ACCENT}"), (f" {option}", MUTED)))
     if interaction.kind == "approval":
+        rows.append(Text(""))
         if interaction.sending:
             rows.append(Text("Sending…", style=MUTED))
         else:
-            choices = Text()
-            choices.append("1", style=f"bold {ACCENT}")
-            choices.append(" approve once   ", style=MUTED)
-            if "approve_bash_always" in interaction.allowed_decisions:
-                choices.append("2", style=f"bold {ACCENT}")
-                choices.append(" always allow   ", style=MUTED)
-            choices.append("3", style=f"bold {ACCENT}")
-            choices.append(" reject", style=MUTED)
-            choices.append("   enter approve · esc reject", style=MUTED)
-            rows.append(choices)
-    elif interaction.options:
-        rows.append(Text("Type a number or your own answer below and press Enter.", style=MUTED))
+            rows.append(_approval_choices(interaction.allowed_decisions, interaction.grant))
     else:
-        rows.append(Text("Type your answer below and press Enter.", style=MUTED))
+        if interaction.options:
+            rows.append(Text(""))
+            rows.append(_numbered(interaction.options))
+        rows.append(Text(""))
+        rows.append(
+            Text(
+                "Type a number, or your own answer, and press Enter."
+                if interaction.options
+                else "Type your answer and press Enter.",
+                style=MUTED,
+            )
+        )
     return Panel(
         Group(*rows),
-        title="APPROVAL" if interaction.kind == "approval" else "QUESTION",
+        title=Text("Approval" if interaction.kind == "approval" else "Question", style=WARNING),
         title_align="left",
         border_style=WARNING,
         box=box.ROUNDED,
@@ -97,20 +96,46 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
     )
 
 
-def render_command_menu(commands: tuple[CommandSpec, ...], selected: int) -> RenderableType:
-    """The commands a draft could become, one highlighted. Enter runs it, Tab takes it."""
+def _approval_choices(allowed: tuple[str, ...], grant: str) -> RenderableType:
+    """The decisions, one to a row, the key that makes each beside it -- the way an
+    editor's agent lays out a permission prompt, so the choice is read before the key.
+    The standing grant names what it would cover, when the backend said, because a
+    choice whose scope is unstated is read as the narrowest or the widest thing it could
+    be, and is wrong either way."""
+    choices = Table.grid(padding=(0, 2))
+    choices.add_column(width=1, no_wrap=True, style=f"bold {ACCENT}")
+    choices.add_column(no_wrap=True)
+    choices.add_column(style=MUTED, no_wrap=True)
+    choices.add_row("1", "Approve once", "enter")
+    if "approve_bash_always" in allowed:
+        choices.add_row("2", f"Always allow {grant}" if grant else "Always allow this", "")
+    choices.add_row("3", "Reject", "esc")
+    return choices
+
+
+def _numbered(options: tuple[str, ...]) -> RenderableType:
+    rows = Table.grid(padding=(0, 2))
+    rows.add_column(width=1, no_wrap=True, style=f"bold {ACCENT}")
+    rows.add_column(ratio=1, overflow="fold")
+    for index, option in enumerate(options, start=1):
+        rows.add_row(str(index), option)
+    return rows
+
+
+def render_command_menu(rows: tuple[Suggestion, ...], selected: int) -> RenderableType:
+    """The rows a draft could become, one highlighted. Enter runs it, Tab takes it."""
     table = Table.grid(padding=(0, 2))
     table.add_column(width=2, no_wrap=True)
     table.add_column(no_wrap=True)
     table.add_column(no_wrap=True, style=MUTED)
     table.add_column(ratio=1, style=MUTED, overflow="ellipsis")
-    for index, command in enumerate(commands):
+    for index, row in enumerate(rows):
         chosen = index == selected
         table.add_row(
             Text("›" if chosen else "", style=f"bold {ACCENT}"),
-            Text(f"/{command.name}", style=f"bold {ACCENT}" if chosen else ACCENT),
-            Text(command.argument),
-            Text(command.summary, style="bold" if chosen else MUTED),
+            Text(row.label, style=f"bold {ACCENT}" if chosen else ACCENT),
+            Text(row.argument),
+            Text(row.summary, style="bold" if chosen else MUTED),
         )
     return table
 
@@ -128,7 +153,8 @@ def render_notice(state: AppState) -> Text | None:
     if state.clock - notice.shown_at >= _NOTICE_SECONDS[notice.level]:
         return None
     style = {"info": MUTED, "warning": WARNING, "error": ERROR}[notice.level]
-    return Text(f"· {notice.message}", style=style, overflow="ellipsis", no_wrap=True)
+    mark = {"info": "·", "warning": "!", "error": "✗"}[notice.level]
+    return Text(f"{mark} {notice.message}", style=style, overflow="ellipsis", no_wrap=True)
 
 
 def render_footer(state: AppState) -> Text:
@@ -141,15 +167,17 @@ def render_footer(state: AppState) -> Text:
         # The folder the run works in, where an editor's agent shows it: under the input,
         # beside the settings for the next turn. The folders the conversation reaches
         # beyond it by name -- a path each would take the line, and `/add` lists them.
+        # Three groups, set apart by space rather than by another dot.
         place = state.workspace_path
         if state.folders:
-            place += "  + " + ", ".join(_folder_name(folder) for folder in state.folders)
-        if place:
-            left = f"{place}  ·  {left}"
+            place += " + " + ", ".join(_folder_name(folder) for folder in state.folders)
+        groups = [group for group in (place, left) if group]
         if state.usage is not None:
-            left += f" · {_usage_label(state.usage)}"
+            groups.append(_usage_label(state.usage))
+        left = "   ".join(groups)
     right = "ctrl+p commands"
-    width = max(1, state.viewport_width - 2)
+    # The footer sits two cells in from either edge, level with the transcript's text.
+    width = max(1, state.viewport_width - 4)
     if width < len(right) + 6:
         text = Text(left, style=MUTED, overflow="ellipsis", no_wrap=True)
         text.truncate(width, overflow="ellipsis")
@@ -166,13 +194,14 @@ def render_footer(state: AppState) -> Text:
     return text
 
 
-def render_help(*, developer: bool = False) -> RenderableType:
+def render_help(*, developer: bool = False, choices: Choices | None = None) -> RenderableType:
     table = Table.grid(padding=(0, 2))
     table.add_column(no_wrap=True, style=f"bold {ACCENT}")
+    table.add_column(no_wrap=True, style=MUTED)
     table.add_column(ratio=1, style=MUTED)
     for command in visible_commands(developer=developer):
-        suffix = f" {command.argument}" if command.argument else ""
-        table.add_row(f"/{command.name}{suffix}", command.summary)
+        values = (choices or {}).get(command.name, ())
+        table.add_row(f"/{command.name}", argument_label(command, values), command.summary)
     keys = Table.grid(padding=(0, 2))
     keys.add_column(no_wrap=True, style=f"bold {ACCENT}")
     keys.add_column(style=MUTED)

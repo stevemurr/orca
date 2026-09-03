@@ -103,7 +103,7 @@ These are the kinds orca renders. A backend that emits only `run.created`, `answ
 | `answer.delta` | `effect_id`, `model_call_id`, `text` | Streams the answer as it is written. The **pair** identifies one attempt: a delta from a different pair means the previous attempt was abandoned or replayed, so what was streamed is discarded and the new one starts clean. Both strings are opaque — a backend with one attempt identity may repeat it in both. |
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | The model's own checklist, rendered above the activity rows. Each event carries the **complete** list and replaces the previous one; there is no merge rule. Nothing counts the steps, so two `in_progress` rows render as two. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
-| `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments.argv`, `allowed_decisions` | Opens the modal and parks the run. `title` is written for a person to judge. `allowed_decisions` is what the modal offers — orca binds `1` to `approve`, `3` to `reject`, and `2` to `approve_bash_always`, the one persistent grant it knows by sight, when the request lists it. |
+| `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments.argv`, `allowed_decisions`, `grant` | Asks at the end of the turn and parks the run. `title` is written for a person to judge. `allowed_decisions` is what is offered — orca binds `1` to `approve`, `3` to `reject`, and `2` to `approve_bash_always`, the one persistent grant it knows by sight, when the request lists it. `grant` says in words what that grant would cover, and orca shows it on the choice. |
 | `approval.resolved` | — | Dismisses the modal. |
 | `question.requested` | `question_id`, `prompt` | Asks inline above the composer; the next thing typed becomes the answer. |
 | `question.resolved` | — | Dismisses it. |
@@ -239,7 +239,7 @@ from orca.backend import RunRequest
 from orca.output.plain import run_once
 
 exit_code = asyncio.run(
-    run_once(EchoBackend(), RunRequest("hello", None, "ws-1", ".", "auto", "safe"))
+    run_once(EchoBackend(), RunRequest("hello", None, "ws-1", ".", "normal", "ask"))
 )
 ```
 
@@ -253,7 +253,7 @@ exit_code = asyncio.run(
 |---|---|
 | `/chat` `/review` `/threads` `/new` | conversation, the result and its artifacts, pick a conversation, start one |
 | `/resume` `/pause` `/cancel` | act on the run in flight |
-| `/mode <m>` `/permissions <p>` | set the two strings passed to the backend on the next turn |
+| `/mode <m>` `/permissions <p>` | set the two strings passed to the backend on the next turn; the menu lists the values the backend advertises |
 | `/workspace <path>` `/add <path>` `/status` `/help` | rebind the folder, reach one more folder from this conversation, report, list everything |
 | `/inspect` | developer events, on their own cursor, never mixed into the conversation |
 | Enter · Shift+Enter · Esc · Ctrl+P | send · newline · back, or pause from the conversation · command palette |

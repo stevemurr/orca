@@ -46,12 +46,9 @@ class Composer(TextArea):
         #: Key to decision while an approval is waiting, set by the host; empty otherwise.
         #: The keys go to the approval rather than into the text, as they would in a modal.
         self.approval_keys: dict[str, str] = {}
-
-    @property
-    def naming_a_command(self) -> bool:
-        """Whether the draft is a slash and the start of a name, and nothing else yet."""
-        text = self.text
-        return text.startswith("/") and "\n" not in text and " " not in text
+        #: Whether the `/` menu has rows right now, set by the host as it renders them. Up,
+        #: down and Tab go to the menu while it does, and to the text otherwise.
+        self.menu_open: bool = False
 
     @override
     async def _on_key(self, event: events.Key) -> None:
@@ -64,7 +61,7 @@ class Composer(TextArea):
                 event.prevent_default()
                 self.post_message(self.Decided(decision))
                 return
-        if self.naming_a_command and event.key in {"up", "down", "tab"}:
+        if self.menu_open and event.key in {"up", "down", "tab"}:
             event.stop()
             event.prevent_default()
             if event.key == "tab":
@@ -90,5 +87,5 @@ class Composer(TextArea):
         self.move_cursor(self.document.end)
 
     def fit_height(self) -> None:
-        lines = min(7, max(1, self.text.count("\n") + 1))
-        self.styles.height = lines + 2
+        # As tall as the draft, to seven lines; the frame around it carries the border.
+        self.styles.height = min(7, max(1, self.text.count("\n") + 1))

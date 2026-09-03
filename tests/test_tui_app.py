@@ -8,7 +8,7 @@ from typing import override
 from textual.widgets import ContentSwitcher, Static
 
 from orca.app.actions import EventReceived, RunAccepted
-from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
+from orca.app.model import AppState, Choice, TaskEvent, ThreadReplay, ViewId
 from orca.backend import (
     BackendError,
     Command,
@@ -47,6 +47,8 @@ class FakeBackend:
             workspace_id="ws-1",
             workspace_name="orca",
             workspace_path="~/Code/orca",
+            modes=(Choice("normal"), Choice("plan")),
+            policies=(Choice("ask"), Choice("edits"), Choice("full-access")),
         )
 
     async def start_run(self, request: RunRequest) -> RunInfo:
@@ -471,6 +473,39 @@ async def test_typing_a_slash_opens_a_menu_that_enter_runs_and_tab_completes() -
         await pilot.press("enter")
         await pilot.pause()
         assert composer.text == "/mode "
+
+
+async def test_naming_a_command_offers_the_values_the_backend_accepts() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.replace_text("/perm")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # The command is in the composer to be finished, and the menu has moved on to
+        # what a policy can be. Down once: ask, edits -> edits. Enter sets it.
+        assert composer.text == "/permissions "
+        menu = app.query_one("#command-menu", Static)
+        assert menu.has_class("visible")
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.model.policy == "edits"
+        assert composer.text == ""
+        assert not menu.has_class("visible")
+
+        # A value the backend did not offer is refused, and the notice says what it offers.
+        composer.replace_text("/permissions yolo")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.model.policy == "edits"
+        assert "yolo" in app.model.notices[-1].message
+        assert "full-access" in app.model.notices[-1].message
 
 
 async def test_a_render_between_a_keystroke_and_its_notice_keeps_the_text() -> None:

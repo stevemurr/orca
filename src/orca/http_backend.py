@@ -11,9 +11,9 @@ import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Protocol, assert_never
+from typing import Protocol, assert_never, cast
 
-from orca.app.model import TaskEvent, ThreadReplay
+from orca.app.model import Choice, TaskEvent, ThreadReplay
 from orca.backend import (
     Answer,
     BackendError,
@@ -146,6 +146,8 @@ class HttpBackend:
         self._workspace_resolver: WorkspaceResolver = workspace_resolver
         self._binding: WorkspaceBinding | None = None
         self._protocol_version: str = ""
+        self._modes: tuple[Choice, ...] = ()
+        self._policies: tuple[Choice, ...] = ()
 
     async def connect(self) -> SessionInfo:
         try:
@@ -160,6 +162,8 @@ class HttpBackend:
             raise BackendError(str(exc)) from exc
 
         self._protocol_version = str(discovery.get("protocol_version") or "?")
+        self._modes = _choices(discovery.get("modes"))
+        self._policies = _choices(discovery.get("approval_policies"))
         return self._session_info()
 
     async def _capabilities_or_say_why(self) -> JsonObject:
@@ -356,7 +360,30 @@ class HttpBackend:
             workspace_id=binding.workspace_id,
             workspace_name=binding.name,
             workspace_path=_display_path(binding.root),
+            modes=self._modes,
+            policies=self._policies,
         )
+
+
+def _choices(value: object) -> tuple[Choice, ...]:
+    """The values a setting may take, from the wire: a name, or a name with a summary.
+
+    An entry of another shape is dropped, as every unknown thing under `/capabilities` is,
+    and a list that is not a list is nothing at all.
+    """
+    if not isinstance(value, list):
+        return ()
+    found: list[Choice] = []
+    for item in cast("list[object]", value):
+        if isinstance(item, str) and item:
+            found.append(Choice(item))
+        elif isinstance(item, dict):
+            entry = cast("dict[str, object]", item)
+            name = entry.get("name")
+            summary = entry.get("summary")
+            if isinstance(name, str) and name:
+                found.append(Choice(name, summary if isinstance(summary, str) else ""))
+    return tuple(found)
 
 
 def normalize_event(event: SSEEvent) -> TaskEvent | None:

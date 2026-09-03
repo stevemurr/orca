@@ -97,8 +97,8 @@ def run_command(
     message: str = typer.Argument(..., help="What you want done."),
     workspace: str = typer.Option("", "--workspace", "-w", help="Workspace name, id, or path."),
     thread: str = typer.Option("", "--thread", "-t", help="Continue a thread by id."),
-    mode: str = typer.Option("auto", "--mode", help="Run mode."),
-    policy: str = typer.Option("safe", "--policy", help="Approval policy."),
+    mode: str = typer.Option("normal", "--mode", help="Run mode."),
+    policy: str = typer.Option("ask", "--policy", help="Approval policy."),
     no_follow: bool = typer.Option(False, "--no-follow", help="Print the run id and exit."),
     jsonl: bool = typer.Option(False, "--jsonl", help="Emit versioned JSON Lines."),
 ) -> None:

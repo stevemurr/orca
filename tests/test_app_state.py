@@ -22,6 +22,7 @@ from orca.app.commands import ParsedCommand, parse_input
 from orca.app.model import (
     Activity,
     AppState,
+    Choice,
     Narration,
     RunStatus,
     Snippet,
@@ -99,8 +100,8 @@ def test_event_replay_builds_the_conversation_without_renderables() -> None:
             "run.created",
             {
                 "message": "Build the terminal shell",
-                "mode": "auto",
-                "approval_policy": "safe",
+                "mode": "normal",
+                "approval_policy": "ask",
             },
         ),
     )
@@ -625,6 +626,56 @@ def test_a_rows_kind_is_read_from_the_backend_and_survives_an_upsert() -> None:
     )
 
     assert state.turns[-1].progress[0].kind == "read"
+
+
+def test_a_named_command_suggests_the_values_the_backend_offers() -> None:
+    from orca.app.commands import suggest
+
+    choices = {
+        "mode": (Choice("normal"), Choice("plan")),
+        "permissions": (
+            Choice("ask", "Ask before anything that changes the machine."),
+            Choice("edits"),
+            Choice("full-access"),
+        ),
+    }
+
+    assert [s.name for s in suggest("/permissions ", choices=choices)] == [
+        "ask",
+        "edits",
+        "full-access",
+    ]
+    assert [s.insert for s in suggest("/mode p", choices=choices)] == ["/mode plan"]
+    assert suggest("/mode plan x", choices=choices) == ()
+    assert suggest("/add ", choices=choices) == ()
+    row = suggest("/perm", choices=choices)[0]
+    assert row.argument == "ask | edits | full-access"
+    assert not row.runnable
+    assert suggest("/perm")[0].argument == "<policy>"
+    # The summary beside a value is what the backend said it means, or the command it runs.
+    assert suggest("/permissions a", choices=choices)[0].summary.startswith("Ask before")
+    assert suggest("/permissions e", choices=choices)[0].summary == "/permissions edits"
+
+
+def test_a_setting_outside_what_the_backend_offers_is_refused() -> None:
+    from orca.app.actions import CommandInvoked, Connected
+
+    connected = reduce(
+        AppState(),
+        Connected("p", "e", "1", "ws", "n", "/n", policies=(Choice("ask"), Choice("edits"))),
+    ).state
+
+    refused = reduce(connected, CommandInvoked("permissions", "yolo")).state
+    assert refused.policy == "ask"
+    assert refused.notices[-1].level == "warning"
+    assert "ask, edits" in refused.notices[-1].message
+
+    assert reduce(connected, CommandInvoked("permissions", "edits")).state.policy == "edits"
+    # Nothing advertised for modes, so anything goes, as before.
+    assert reduce(connected, CommandInvoked("mode", "anything")).state.mode == "anything"
+
+    told = reduce(connected, CommandInvoked("permissions", "")).state
+    assert told.notices[-1].message == "permissions: ask · also edits"
 
 
 def test_a_slash_suggests_commands_until_an_argument_or_a_message_begins() -> None:

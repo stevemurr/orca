@@ -8,6 +8,7 @@ from typing import override
 
 import pytest
 
+from orca.app.model import Choice
 from orca.backend import BackendError, CommandOutcome, Pause, RunRequest
 from orca.client import ApiError, SSEEvent
 from orca.connection import Connection, CredentialSource
@@ -25,7 +26,12 @@ class FakeClient:
         self.closed: bool = False
 
     async def capabilities(self) -> JsonObject:
-        return {"protocol_version": "1.6"}
+        return {
+            "protocol_version": "1.6",
+            # A bare name, a name with a summary, and two things that are neither.
+            "modes": ["normal", {"name": "plan", "summary": "Read only."}],
+            "approval_policies": [{"name": "ask"}, "edits", 7, {"summary": "no name"}],
+        }
 
     async def create_thread(self, workspace_id: str | None = None, title: str = "") -> JsonObject:
         self.created_threads.append({"workspace_id": workspace_id, "title": title})
@@ -194,7 +200,7 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
 
     session = await backend.connect()
     run = await backend.start_run(
-        RunRequest("Build it", None, session.workspace_id, "auto", "safe")
+        RunRequest("Build it", None, session.workspace_id, "normal", "ask")
     )
     streamed = [item async for item in backend.stream(run.run_id, after_seq=0, developer=False)]
     command = await backend.send_command(run.run_id, Pause())
@@ -204,6 +210,8 @@ async def test_boot_submit_stream_command_and_history_are_contract_only() -> Non
 
     assert session.workspace_path == "/tmp/project"
     assert session.protocol_version == "1.6"
+    assert session.modes == (Choice("normal"), Choice("plan", "Read only."))
+    assert session.policies == (Choice("ask"), Choice("edits"))
     assert run.thread_id == "thread-1"
     assert client.created_runs[0]["client_context"] is None
     assert str(client.created_runs[0]["idempotency_key"]).startswith("idem_")

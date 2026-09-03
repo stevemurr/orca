@@ -41,12 +41,29 @@ same run twice.
 ### `GET /capabilities`
 
 ```json
-{"protocol_version": "1"}
+{
+  "protocol_version": "1",
+  "modes": [
+    {"name": "normal", "summary": "Read and change things, asking as the policy says."},
+    {"name": "plan", "summary": "Read only, until you approve a plan."}
+  ],
+  "approval_policies": [
+    {"name": "ask", "summary": "Ask before anything that changes the machine."},
+    {"name": "edits", "summary": "Write files without asking; commands still ask."},
+    {"name": "full-access", "summary": "Never ask."}
+  ]
+}
 ```
 
-orca reads `protocol_version` and nothing else. Anything else you advertise is ignored: there is
-no feature flag orca gates a control on, because a feature map is a promise about *your*
-architecture and the client has no view that could honour one.
+orca reads `protocol_version`, and two optional lists. `modes` and `approval_policies` are the
+values `/mode` and `/permissions` accept, in your words, each a name with a summary -- a bare
+string is a name with none. Listed, they are offered as a menu once the command is typed, the
+summary beside each, shown in `/help`, and a value not on the list is refused with the list
+before it reaches you. Omitted, whatever is typed is passed through.
+
+Anything else you advertise is ignored: there is no feature flag orca gates a control on, because
+a feature map is a promise about *your* architecture and the client has no view that could
+honour one.
 
 ### `GET /health`
 
@@ -124,15 +141,16 @@ orca refuses to continue a thread whose `workspace_id` is not the bound one.
 {
   "workspace_id": "ws_01J…",
   "message": {"content": "Add retry handling to the websocket client."},
-  "mode": "auto",
-  "approval_policy": "safe"
+  "mode": "normal",
+  "approval_policy": "ask"
 }
 ```
 
 Return **202** immediately with `{"run_id", "thread_id"}`. Never hold the connection for the work.
 
 `mode` and `approval_policy` are your vocabularies, not orca's. It passes through whatever `/mode`
-and `/permissions` were set to and defaults to `auto` and `safe`.
+and `/permissions` were set to and defaults to `normal` and `ask`. List the values you accept under
+`/capabilities` and orca will offer them; otherwise it takes anything.
 
 The run works in the workspace's folder and nowhere else. orca used to send a `client_context`
 naming the subfolder the person launched from; no backend honoured it, and showing that subfolder
@@ -247,7 +265,7 @@ which is the one failure this rule exists to prevent.
 | `answer.delta` | `effect_id`, `model_call_id`, `text` | Streams the answer. The pair identifies one attempt; a delta from a different pair discards what was streamed and starts again. Both are opaque — repeat one value in both if you have a single attempt identity. |
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
-| `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments`, `allowed_decisions` | Inline at the end of the transcript with its choices, and the run parks. `1`, `y` or Enter approve; `2` allows always when offered; `3`, `n` or Esc reject. `title` is what a person judges. From `arguments`: `argv` is shown as a shell-quoted command line; `path` with `content` is shown as the file, highlighted by its extension; `path` with `old` and `new` is shown as a diff. |
+| `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments`, `allowed_decisions`, `grant` | Inline at the end of the transcript with its choices, and the run parks. `1`, `y` or Enter approve; `2` allows always when offered; `3`, `n` or Esc reject. `title` is what a person judges. `grant` is what "always" would cover, in words -- `git commands`, `file writes` -- and orca puts it on that choice. From `arguments`: `argv` is shown as a shell-quoted command line; `path` with `content` is shown as the file, highlighted by its extension; `path` with `old` and `new` is shown as a diff. |
 | `approval.resolved` | `decision` | The prompt becomes its answer, kept in the transcript where it was decided. A run paused under the modal stays paused: send `run.paused` again after this, since orca reads a resolution as running. |
 | `question.requested` | `question_id`, `prompt`, `options[]` | Inline above the composer; the next thing typed is the answer. `options` are the agent's guesses, shown numbered — a number picks one, anything else is sent as typed, and an empty answer is sent as "I am not answering". |
 | `question.resolved` | — | Dismisses it. |
