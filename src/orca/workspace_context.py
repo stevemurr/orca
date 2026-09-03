@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from orca.app.model import Choice
 from orca.client import ApiError
 from orca.json_types import JsonObject
 from orca.process import ProcessError, ProcessSpec, run_process
@@ -54,6 +55,8 @@ class WorkspaceBinding:
     name: str
     root: Path
     vcs: Literal["git", "none"]
+    #: The skills the backend found beside the folder, as it listed them.
+    skills: tuple[Choice, ...] = ()
 
 
 def discover_local_workspace(path: Path) -> LocalWorkspace:
@@ -272,4 +275,5 @@ def _binding_from_record(
             if local is not None
             else ("git" if workspace.get("vcs", "git") == "git" else "none")
         ),
+        skills=Choice.parse_all(workspace.get("skills")),
     )

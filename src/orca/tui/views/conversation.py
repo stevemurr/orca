@@ -16,7 +16,13 @@ from textual.app import ComposeResult
 from textual.widgets import Static
 
 from orca.app.model import AppState
-from orca.tui.render.conversation import render_turn, turn_key, welcome
+from orca.tui.render.conversation import (
+    Piece,
+    render_live_turn,
+    render_turn,
+    turn_key,
+    welcome,
+)
 from orca.tui.views.base import StateView
 
 
@@ -35,14 +41,43 @@ class ConversationView(StateView):
         #: is mounted asynchronously and a query between the ask and the mount would not
         #: see it -- and the next update would mount it again.
         self._panels: list[TurnPanel] = []
+        #: The moving pieces of the turn a run is going in, under its head: the paragraph
+        #: being written, and the last tool group with the spinner and prompt. Each in a
+        #: panel of its own, so a delta redraws a paragraph and a tick a few lines, not
+        #: the whole turn.
+        self._live: list[TurnPanel] = []
 
     @override
     def compose(self) -> ComposeResult:
         yield Static(id="conversation-welcome")
 
+    def on_mount(self) -> None:
+        # Anchored, the view stays at the end as content grows, and Textual keeps it
+        # there during layout rather than one frame later: scrolling to the end after
+        # the refresh showed the new lines at the old offset for a frame, then jumped,
+        # which a person saw as a flash when a block of code arrived. A person who
+        # scrolls up releases the anchor; scrolling back to the end takes it again,
+        # and Textual does both without help from here.
+        self.anchor()
+
+    def _show_live(self, pieces: tuple[Piece, ...]) -> None:
+        """The live turn's moving pieces, by position: a panel each, kept while its key
+        holds, redrawn when it changes or when it has none, gone when the turn settles."""
+        while len(self._live) > len(pieces):
+            _ = self._live.pop().remove()
+        for index, (key, content) in enumerate(pieces):
+            if index < len(self._live):
+                panel = self._live[index]
+                if key is None or panel.key != key:
+                    panel.key = key
+                    panel.update(content)
+            else:
+                panel = TurnPanel(key, content)
+                self._live.append(panel)
+                _ = self.mount(panel)
+
     @override
     def update_state(self, state: AppState) -> None:
-        was_at_end = self.is_vertical_scroll_end or self.max_scroll_y == 0
         width = max(1, state.viewport_width - 2)
 
         opening = self.query_one("#conversation-welcome", Static)
@@ -53,19 +88,25 @@ class ConversationView(StateView):
         # A new conversation has fewer turns than the last one shown: the rest go.
         while len(self._panels) > len(state.turns):
             _ = self._panels.pop().remove()
+        if not state.turns:
+            self._show_live(())
 
+        last = len(state.turns) - 1
         for index, turn in enumerate(state.turns):
             key = turn_key(state, turn, width=width)
+            content: RenderableType | None = None
+            moving: tuple[Piece, ...] = ()
+            if key is None and index == last:
+                (key, content), *rest = render_live_turn(state, turn, width=width)
+                moving = tuple(rest)
             if index < len(self._panels):
                 panel = self._panels[index]
-                if key is not None and panel.key == key:
-                    continue
-                panel.key = key
-                panel.update(render_turn(state, turn, width=width))
+                if key is None or panel.key != key:
+                    panel.key = key
+                    panel.update(content or render_turn(state, turn, width=width))
             else:
-                panel = TurnPanel(key, render_turn(state, turn, width=width))
+                panel = TurnPanel(key, content or render_turn(state, turn, width=width))
                 self._panels.append(panel)
                 _ = self.mount(panel)
-
-        if was_at_end:
-            self.call_after_refresh(self.scroll_end, animate=False)
+            if index == last:
+                self._show_live(moving)

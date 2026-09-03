@@ -8,9 +8,8 @@ from typing import ClassVar, override
 
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markdown import CodeBlock, Markdown, MarkdownElement
-from rich.syntax import Syntax
 
-from orca.tui.render.code import CODE_THEME
+from orca.tui.render.code import CODE_THEME, CachedSyntax
 from orca.tui.render.theme import CODE_BACKGROUND, MARKDOWN_THEME
 
 _FLAT_HEADING = re.compile(r"#{1,6}[ \t]+")
@@ -62,7 +61,7 @@ class AnswerCodeBlock(CodeBlock):
 
     @override
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        yield Syntax(
+        yield CachedSyntax(
             str(self.text).rstrip(),
             self.lexer_name,
             theme=CODE_THEME,

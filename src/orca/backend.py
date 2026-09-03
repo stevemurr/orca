@@ -70,6 +70,9 @@ class SessionInfo:
     #: refused before it is sent. Empty means anything typed is passed through as before.
     modes: tuple[Choice, ...] = ()
     policies: tuple[Choice, ...] = ()
+    #: The skills the workspace offers, name and summary, for the `/` menu. A `/name`
+    #: that is one is sent as a message as written; the backend does the rest.
+    skills: tuple[Choice, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

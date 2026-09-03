@@ -19,6 +19,7 @@ class Connected:
     reset_conversation: bool = False
     modes: tuple[Choice, ...] = ()
     policies: tuple[Choice, ...] = ()
+    skills: tuple[Choice, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -11,7 +11,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Protocol, assert_never, cast
+from typing import Protocol, assert_never
 
 from orca.app.model import Choice, TaskEvent, ThreadReplay
 from orca.backend import (
@@ -362,28 +362,13 @@ class HttpBackend:
             workspace_path=_display_path(binding.root),
             modes=self._modes,
             policies=self._policies,
+            skills=binding.skills,
         )
 
 
 def _choices(value: object) -> tuple[Choice, ...]:
-    """The values a setting may take, from the wire: a name, or a name with a summary.
-
-    An entry of another shape is dropped, as every unknown thing under `/capabilities` is,
-    and a list that is not a list is nothing at all.
-    """
-    if not isinstance(value, list):
-        return ()
-    found: list[Choice] = []
-    for item in cast("list[object]", value):
-        if isinstance(item, str) and item:
-            found.append(Choice(item))
-        elif isinstance(item, dict):
-            entry = cast("dict[str, object]", item)
-            name = entry.get("name")
-            summary = entry.get("summary")
-            if isinstance(name, str) and name:
-                found.append(Choice(name, summary if isinstance(summary, str) else ""))
-    return tuple(found)
+    """The values a setting may take, from the wire; see `Choice.parse_all`."""
+    return Choice.parse_all(value)
 
 
 def normalize_event(event: SSEEvent) -> TaskEvent | None:

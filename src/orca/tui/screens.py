@@ -15,6 +15,7 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from orca.app.commands import Choices
+from orca.app.model import Choice
 from orca.backend import ThreadSummary
 from orca.tui.render import render_help
 from orca.tui.render.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING
@@ -23,15 +24,24 @@ from orca.tui.render.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING
 class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss", "Close", show=False)]
 
-    def __init__(self, *, developer: bool = False, choices: Choices | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        developer: bool = False,
+        choices: Choices | None = None,
+        skills: tuple[Choice, ...] = (),
+    ) -> None:
         super().__init__()
         self._developer: bool = developer
         self._choices: Choices = choices or {}
+        self._skills: tuple[Choice, ...] = skills
 
     @override
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-card", id="help-card"):
-            yield Static(render_help(developer=self._developer, choices=self._choices))
+            yield Static(
+                render_help(developer=self._developer, choices=self._choices, skills=self._skills)
+            )
             yield Static("esc close", classes="modal-hint")
 
 

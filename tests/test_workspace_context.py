@@ -233,3 +233,20 @@ def test_resolver_does_not_reuse_an_unidentified_git_registration(tmp_path: Path
     assert binding.workspace_id == "ws_existing"
     assert client.workspaces[0]["repo_identity"] == identity
     assert client.creations[-1]["replace_existing"] is True
+
+
+def test_a_record_carries_the_skills_the_backend_listed() -> None:
+    from orca.app.model import Choice
+    from orca.workspace_context import (
+        _binding_from_record,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    binding = _binding_from_record(
+        {
+            "workspace_id": "ws_1",
+            "root_path": "/tmp/project",
+            "skills": [{"name": "deploy", "summary": "Ship a release."}, "review", 7],
+        }
+    )
+
+    assert binding.skills == (Choice("deploy", "Ship a release."), Choice("review"))

@@ -51,6 +51,7 @@ class FakeBackend:
             workspace_path="~/Code/orca",
             modes=(Choice("normal"), Choice("plan")),
             policies=(Choice("ask"), Choice("edits"), Choice("full-access")),
+            skills=(Choice("deploy", "Ship a release."),),
         )
 
     async def start_run(self, request: RunRequest) -> RunInfo:
@@ -515,6 +516,7 @@ async def test_a_turn_that_did_not_change_is_not_rendered_again() -> None:
     the turn the run is going in and nothing else. The whole transcript used to be one
     widget, rendered on every tick, and typing waited behind it."""
     from orca.app.model import Narration, ProgressItem, RunStatus, TurnState
+    from orca.tui.render.conversation import render_live_turn as real_live
     from orca.tui.render.conversation import render_turn as real
     from orca.tui.views import conversation as view_module
     from orca.tui.views.conversation import ConversationView
@@ -524,6 +526,10 @@ async def test_a_turn_that_did_not_change_is_not_rendered_again() -> None:
     def counting(state: AppState, turn: TurnState, *, width: int) -> object:
         rendered.append(turn.run_id)
         return real(state, turn, width=width)
+
+    def counting_live(state: AppState, turn: TurnState, *, width: int) -> object:
+        rendered.append(turn.run_id)
+        return real_live(state, turn, width=width)
 
     settled = TurnState("run-1", request="first", answer="done", status="completed")
     live = TurnState(
@@ -544,7 +550,10 @@ async def test_a_turn_that_did_not_change_is_not_rendered_again() -> None:
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
         view = app.query_one(ConversationView)
-        with patch.object(view_module, "render_turn", counting):
+        with (
+            patch.object(view_module, "render_turn", counting),
+            patch.object(view_module, "render_live_turn", counting_live),
+        ):
             view.update_state(state)
             await pilot.pause()
             assert rendered == ["run-1", "run-2"]
@@ -559,6 +568,136 @@ async def test_a_turn_that_did_not_change_is_not_rendered_again() -> None:
             assert rendered[-2:] == ["run-1", "run-2"]
 
 
+async def test_the_conversation_follows_new_output_unless_the_person_scrolled_up() -> None:
+    from orca.app.model import RunStatus, TurnState
+    from orca.tui.views.conversation import ConversationView
+
+    def turns(count: int) -> tuple[TurnState, ...]:
+        return tuple(
+            TurnState(f"run-{n}", request=f"ask {n}", answer="line\n" * 6, status="completed")
+            for n in range(count)
+        )
+
+    app = OrcaApp(FakeBackend())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        view = app.query_one(ConversationView)
+        state = AppState(booting=False, connected=True, run_status=RunStatus.COMPLETED)
+
+        view.update_state(replace(state, turns=turns(4)))
+        await pilot.pause()
+        await pilot.pause()
+        assert view.max_scroll_y > 0
+        assert view.scroll_y == view.max_scroll_y
+
+        # Reading back up the transcript, new output does not pull the view down.
+        view.scroll_to(y=0, animate=False)
+        await pilot.pause()
+        view.update_state(replace(state, turns=turns(6)))
+        await pilot.pause()
+        await pilot.pause()
+        assert view.scroll_y == 0
+
+        # Back at the end, the view follows again.
+        view.scroll_end(animate=False)
+        await pilot.pause()
+        view.update_state(replace(state, turns=turns(8)))
+        await pilot.pause()
+        await pilot.pause()
+        assert view.scroll_y == view.max_scroll_y
+
+
+async def test_the_composer_keeps_the_focus_after_a_send() -> None:
+    """It is disabled while the send is in flight, and a disabled widget loses focus;
+    the shell gives it back, so the next message can be typed at once."""
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.replace_text("first")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app.focused is composer
+        assert not composer.disabled
+
+
+async def test_up_brings_back_earlier_messages_and_down_returns_to_the_draft() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        for message in ("first", "second"):
+            composer.replace_text(message)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+        assert composer.text == ""
+
+        composer.replace_text("a draft")
+        await pilot.pause()
+        await pilot.press("up")
+        assert composer.text == "second"
+        await pilot.press("up")
+        assert composer.text == "first"
+        # Nothing earlier: Up stays put.
+        await pilot.press("up")
+        assert composer.text == "first"
+        await pilot.press("down")
+        assert composer.text == "second"
+        # Past the newest, the draft that was being typed comes back.
+        await pilot.press("down")
+        assert composer.text == "a draft"
+
+        # Inside a draft of several lines, Up moves the cursor until the first line.
+        composer.replace_text("one\ntwo")
+        await pilot.pause()
+        await pilot.press("up")
+        assert composer.text == "one\ntwo"
+        await pilot.press("up")
+        assert composer.text == "second"
+
+
+async def test_a_skill_from_the_menu_is_sent_as_a_message_for_the_backend_to_read() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.replace_text("/dep")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert composer.text == "/deploy "
+
+        await pilot.press("s", "t", "a", "g", "i", "n", "g", "enter")
+        await pilot.pause()
+        await pilot.pause()
+
+    assert backend.started == ["/deploy staging"]
+
+
+async def test_resume_opens_the_thread_picker_once_connected() -> None:
+    app = OrcaApp(FakeBackend(), resume=True)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        assert isinstance(app.screen, ThreadPickerScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ThreadPickerScreen)
+
+
 async def test_a_burst_of_events_is_rendered_once() -> None:
     """What the backend sends is rendered when the loop is idle, however many events
     arrived; what the person does is rendered as it happens."""
@@ -566,7 +705,11 @@ async def test_a_burst_of_events_is_rendered_once() -> None:
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
         renders: list[int] = []
-        with patch.object(app, "_render_model", side_effect=lambda: renders.append(1)):
+
+        def fake(**_: object) -> None:
+            renders.append(1)
+
+        with patch.object(app, "_render_model", side_effect=fake):
             for sequence in range(1, 6):
                 app.apply_model_action(
                     EventReceived(
@@ -583,6 +726,44 @@ async def test_a_burst_of_events_is_rendered_once() -> None:
 
             app.apply_model_action(CommandInvoked("status"))
             assert renders == [1, 1]
+
+
+async def test_the_shell_is_redrawn_only_when_what_it_shows_changed() -> None:
+    """A delta changes the transcript and nothing around it; a person's command is always
+    drawn in full."""
+    from orca.tui import app as app_module
+    from orca.tui.render import render_header as real
+
+    app = OrcaApp(FakeBackend())
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1", 1.0))
+        app.apply_model_action(
+            EventReceived(event(1, "run.created", {"message": "go"})),
+        )
+        await pilot.pause()
+        headers: list[int] = []
+
+        def counting(state: AppState, *, width: int) -> object:
+            headers.append(1)
+            return real(state, width=width)
+
+        with patch.object(app_module, "render_header", counting):
+            for sequence in range(2, 5):
+                app.apply_model_action(
+                    EventReceived(
+                        event(
+                            sequence,
+                            "answer.delta",
+                            {"effect_id": "e", "model_call_id": "m", "text": "word "},
+                        )
+                    )
+                )
+                await pilot.pause()
+            assert headers == []
+
+            app.apply_model_action(CommandInvoked("status"))
+            assert headers == [1]
 
 
 async def test_a_render_between_a_keystroke_and_its_notice_keeps_the_text() -> None:

@@ -14,6 +14,9 @@ MUTED = "#8b98a5"
 SUCCESS = "#75d59a"
 WARNING = "#e5c07b"
 ERROR = "#ef7d7d"
+#: Plan mode: reading only, thinking before doing. A cool violet, so it is neither the
+#: accent (what is live) nor a verdict colour (how something ended).
+PLAN = "#b9a7f2"
 TEXT = "#e6edf3"
 #: Deep water: the shell's ground, and the two steps up from it that a card and a code
 #: block sit on. Cold rather than warm, and never a pure black, so the text colour has

@@ -49,6 +49,13 @@ class Composer(TextArea):
         #: Whether the `/` menu has rows right now, set by the host as it renders them. Up,
         #: down and Tab go to the menu while it does, and to the text otherwise.
         self.menu_open: bool = False
+        #: What was sent from here this session, oldest first, for Up to bring back the
+        #: way a shell does. `_recalled` is where Up and Down are in it -- past the end
+        #: when not looking back -- and `_stash` is the draft that was being typed when
+        #: the looking back began, so Down at the end gives it back.
+        self.sent: list[str] = []
+        self._recalled: int = 0
+        self._stash: str = ""
 
     @override
     async def _on_key(self, event: events.Key) -> None:
@@ -69,9 +76,16 @@ class Composer(TextArea):
             else:
                 self.post_message(self.MenuMoved(-1 if event.key == "up" else 1))
             return
+        if event.key in {"up", "down"} and self._recall(-1 if event.key == "up" else 1):
+            event.stop()
+            event.prevent_default()
+            return
         if event.key == "enter":
             event.stop()
             event.prevent_default()
+            if not self.menu_open:
+                # A message, not a menu choice: kept for Up to bring back.
+                self.remember(self.text)
             self.post_message(self.Submitted(self.text))
             return
         if event.key in {"shift+enter", "alt+enter"}:
@@ -80,6 +94,30 @@ class Composer(TextArea):
             self.replace("\n", *self.selection)
             return
         await super()._on_key(event)
+
+    def remember(self, text: str) -> None:
+        """Keep what was just sent, for Up. The same thing twice running is kept once."""
+        if text.strip() and (not self.sent or self.sent[-1] != text):
+            self.sent.append(text)
+        self._recalled = len(self.sent)
+        self._stash = ""
+
+    def _recall(self, step: int) -> bool:
+        """Move through the history by `step`, or say no: Up and Down move the cursor
+        inside a draft of several lines, and only reach back from its first line or
+        forward from its last, the way a shell with a multi-line edit does."""
+        row, _ = self.cursor_location
+        on_edge = row == 0 if step < 0 else row == self.document.line_count - 1
+        if not self.sent or not on_edge:
+            return False
+        target = self._recalled + step
+        if target < 0 or target > len(self.sent):
+            return False
+        if self._recalled == len(self.sent):
+            self._stash = self.text
+        self._recalled = target
+        self.replace_text(self.sent[target] if target < len(self.sent) else self._stash)
+        return True
 
     def replace_text(self, text: str) -> None:
         """Put `text` in the composer with the cursor at its end."""

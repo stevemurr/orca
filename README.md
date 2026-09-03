@@ -266,8 +266,12 @@ versioned machine-readable stream, `--no-follow` to print the accepted run id an
 exits **2** after reporting an approval or a question, so an unattended process never appears to
 hang.
 
-`orca threads`, `orca auth login|status|logout`, and `orca server status|start|stop|restart` are
-the rest of the surface.
+A `/name` the menu lists as a skill of the workspace is sent as written, and the backend reads the
+skill's instructions as the request; anything after the name is what to apply them to.
+
+`orca --resume` opens on the recent conversations, to pick one up; `orca --thread <id>` opens one
+by id. `orca threads`, `orca auth login|status|logout`, and `orca server status|start|stop|restart`
+are the rest of the surface.
 
 ---
 

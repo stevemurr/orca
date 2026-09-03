@@ -35,12 +35,15 @@ def test_root_help_is_the_small_product_surface() -> None:
 def test_chat_launches_the_view_app_with_resolved_options(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def launch(*, workspace: str, thread: str, profile: str | None, url: str | None) -> None:
+    def launch(
+        *, workspace: str, thread: str, profile: str | None, url: str | None, resume: bool
+    ) -> None:
         captured.update(
             workspace=workspace,
             thread=thread,
             profile=profile,
             url=url,
+            resume=resume,
         )
 
     monkeypatch.setattr(entrypoint, "launch_tui", launch)
@@ -65,6 +68,7 @@ def test_chat_launches_the_view_app_with_resolved_options(monkeypatch: pytest.Mo
         "thread": "thread-1",
         "profile": "staging",
         "url": "https://harness.example.test",
+        "resume": False,
     }
 
 
@@ -79,7 +83,20 @@ def test_default_command_launches_chat(monkeypatch: pytest.MonkeyPatch) -> None:
     result = CliRunner().invoke(entrypoint.app, [])
 
     assert result.exit_code == 0, result.output
-    assert calls == [{"workspace": "", "thread": "", "profile": None, "url": None}]
+    assert calls == [{"workspace": "", "thread": "", "profile": None, "url": None, "resume": False}]
+
+
+def test_resume_opens_the_app_on_the_recent_conversations(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def launch(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(entrypoint, "launch_tui", launch)
+
+    assert CliRunner().invoke(entrypoint.app, ["--resume"]).exit_code == 0
+    assert CliRunner().invoke(entrypoint.app, ["chat", "-r"]).exit_code == 0
+    assert [call["resume"] for call in calls] == [True, True]
 
 
 def test_plain_run_propagates_the_input_required_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:

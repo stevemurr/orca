@@ -61,6 +61,9 @@ def root(
         is_eager=True,
         help="Show the client version and exit.",
     ),
+    resume: bool = typer.Option(
+        False, "--resume", "-r", help="Open with the recent conversations to pick one up."
+    ),
 ) -> None:
     """Open the interactive conversation when no subcommand is supplied."""
 
@@ -71,7 +74,7 @@ def root(
     ctx.call_on_close(lambda: reset_connection_selection(token))
     ctx.obj = GlobalOptions(profile, url)
     if ctx.invoked_subcommand is None:
-        launch_tui(workspace="", thread="", profile=profile, url=url)
+        launch_tui(workspace="", thread="", profile=profile, url=url, resume=resume)
 
 
 @app.command("chat")
@@ -79,6 +82,9 @@ def chat(
     ctx: typer.Context,
     workspace: str = typer.Option("", "--workspace", "-w", help="Workspace name, id, or path."),
     thread: str = typer.Option("", "--thread", "-t", help="Continue a thread by id."),
+    resume: bool = typer.Option(
+        False, "--resume", "-r", help="Open with the recent conversations to pick one up."
+    ),
 ) -> None:
     """Open the interactive terminal application."""
 
@@ -88,6 +94,7 @@ def chat(
         thread=thread,
         profile=options.profile,
         url=options.url,
+        resume=resume,
     )
 
 
@@ -183,6 +190,7 @@ def launch_tui(
     thread: str,
     profile: str | None,
     url: str | None,
+    resume: bool = False,
 ) -> None:
     """Compose and run the interactive application."""
 
@@ -199,7 +207,7 @@ def launch_tui(
             from orca.app.model import AppState
 
             initial = AppState(thread_id=thread)
-        OrcaApp(backend, initial=initial).run()
+        OrcaApp(backend, initial=initial, resume=resume).run()
     except (ConnectionConfigError, CredentialBackendUnavailable) as exc:
         error_console.print(f"[red]connection error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
