@@ -74,6 +74,12 @@ class OrcaApp(App[None]):
         Binding("escape", "context_escape", "Back", show=False),
         Binding("ctrl+q", "quit", "Quit", show=False),
         Binding("ctrl+t", "toggle_tools", "Tool calls", show=False),
+        # Priority, so they win over the composer while an approval waits: a person should
+        # not have to click into the input to answer. `check_action` switches them off the
+        # rest of the time, so a 1 typed into a message is still a 1.
+        Binding("1,y", "decide('approve')", "Approve", show=False, priority=True),
+        Binding("2", "decide('approve_bash_always')", "Always", show=False, priority=True),
+        Binding("3,n", "decide('reject')", "Reject", show=False, priority=True),
     ]
     CSS: ClassVar[str] = """
     Screen {
@@ -416,6 +422,16 @@ class OrcaApp(App[None]):
 
     def action_toggle_tools(self) -> None:
         self.apply_model_action(CommandInvoked("tools"))
+
+    def action_decide(self, decision: str) -> None:
+        self.apply_model_action(ApprovalDecided(decision))
+
+    @override
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action != "decide":
+            return True
+        offered = self._approval_keys().values()
+        return bool(parameters) and parameters[0] in offered
 
     @override
     async def action_quit(self) -> None:

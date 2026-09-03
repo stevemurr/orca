@@ -478,3 +478,44 @@ async def test_a_render_between_a_keystroke_and_its_notice_keeps_the_text() -> N
         await pilot.pause()
         await pilot.pause()
         assert composer.text == ""
+
+
+async def test_an_approval_is_answered_from_anywhere_and_digits_still_type_otherwise() -> None:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+
+        # No approval waiting: a 1 is a character.
+        composer.focus()
+        await pilot.press("1")
+        await pilot.pause()
+        assert composer.text == "1"
+        composer.replace_text("")
+
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    1,
+                    "approval.requested",
+                    {
+                        "approval_id": "approval-1",
+                        "title": "Run the tests?",
+                        "allowed_decisions": ["approve", "reject"],
+                    },
+                )
+            )
+        )
+        await pilot.pause()
+
+        # Focus is not on the input, and 2 is not offered.
+        app.set_focus(None)
+        await pilot.press("2")
+        await pilot.pause()
+        assert backend.commands == []
+        await pilot.press("1")
+        await pilot.pause()
+        assert backend.commands == [("run-1", ResolveApproval("approval-1", "approve"))]
