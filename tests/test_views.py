@@ -21,6 +21,7 @@ from orca.tui.render import (
     render_footer,
     render_header,
     render_interaction,
+    render_plan,
     render_review,
 )
 from orca.tui.render.theme import ACCENT
@@ -206,13 +207,7 @@ def test_markdown_headings_keep_visible_semantic_styling() -> None:
     assert heading.style.color == Color.parse(ACCENT)
 
 
-def test_the_conversation_shows_the_plan_and_which_step_is_running() -> None:
-    """The reason the event exists: a person watching should see where the model is.
-
-    The checklist is rendered above the activity rows, so intent frames the narration, and the
-    active step is the one line that is not muted.
-    """
-
+def _planned() -> AppState:
     state = populated_state()
     turn = replace(
         state.turns[-1],
@@ -223,12 +218,33 @@ def test_the_conversation_shows_the_plan_and_which_step_is_running() -> None:
         ),
         plan_explanation="the old handler was already gone",
     )
-    rendered = plain(render_conversation(replace(state, turns=(turn,)), width=90), width=90)
+    return replace(state, turns=(turn,))
 
-    assert "the old handler was already gone" in rendered
-    assert "✓  read the router" in rendered
-    assert "▸  add the handler" in rendered
-    assert "○  run the suite" in rendered
+
+def test_the_plan_is_pinned_above_the_composer_while_the_run_goes() -> None:
+    """The reason the event exists: a person watching should see where the model is, and
+    not have to scroll for it. While the run goes the checklist lives in its own strip
+    above the composer, not in the transcript; the active step is the one line not muted."""
+
+    state = _planned()
+
+    pinned = render_plan(state, width=90)
+    assert pinned is not None
+    strip = plain(pinned, width=90)
+    transcript = plain(render_conversation(state, width=90), width=90)
+
+    assert "the old handler was already gone" in strip
+    assert "✓  read the router" in strip
+    assert "▸  add the handler" in strip
+    assert "○  run the suite" in strip
+    assert "read the router" not in transcript
+
+
+def test_a_finished_turn_keeps_its_plan_in_the_transcript_above_the_activity() -> None:
+    state = replace(_planned(), run_status=RunStatus.COMPLETED, active_run_id=None)
+
+    assert render_plan(state, width=90) is None
+    rendered = plain(render_conversation(state, width=90), width=90)
     plan_line = rendered.index("read the router")
     assert rendered.index("Build a polished terminal interface") < plan_line
     assert plan_line < rendered.index("Building the terminal shell")
@@ -237,11 +253,25 @@ def test_the_conversation_shows_the_plan_and_which_step_is_running() -> None:
 def test_a_status_this_client_has_never_heard_of_still_shows_its_step() -> None:
     """Statuses are an open vocabulary. Dropping the row would hide work the model named."""
 
-    state = populated_state()
+    state = replace(populated_state(), run_status=RunStatus.COMPLETED, active_run_id=None)
     turn = replace(state.turns[-1], plan=(PlanStep("something new", "invented"),))
     rendered = plain(render_conversation(replace(state, turns=(turn,)), width=90), width=90)
 
     assert "○  something new" in rendered
+
+
+def test_the_active_turn_shows_a_spinner_and_how_long_it_has_run() -> None:
+    from orca.app.model import Usage
+
+    state = replace(populated_state(), run_started_at=100.0, clock=175.0)
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+    footer = plain(
+        render_footer(replace(state, usage=Usage(12_300, 262_144, estimated=True))), width=90
+    )
+
+    assert "Running · 1m 15s" in rendered
+    assert "≈12.3k / 262.1k tokens (4%)" in footer
 
 
 def test_header_names_the_folders_a_conversation_reaches_beyond_the_workspace() -> None:

@@ -60,6 +60,15 @@ class CommandInvoked:
 class RunAccepted:
     run_id: str
     thread_id: str
+    #: Monotonic seconds, from the host that knows the time. Zero when it does not.
+    started_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ClockTicked:
+    """The host's clock, while a run is going, so elapsed time can be shown."""
+
+    now: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +128,7 @@ Action = (
     | ComposerSubmitted
     | CommandInvoked
     | RunAccepted
+    | ClockTicked
     | OperationFailed
     | EventReceived
     | ThreadSelected

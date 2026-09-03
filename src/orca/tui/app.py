@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import ClassVar, assert_never, cast, override
 
@@ -15,6 +16,7 @@ from textual.widgets import ContentSwitcher, Static, TextArea
 from orca.app.actions import (
     Action,
     Back,
+    ClockTicked,
     CommandCompleted,
     CommandInvoked,
     ComposerChanged,
@@ -49,6 +51,7 @@ from orca.tui.render import (
     render_footer,
     render_header,
     render_interaction,
+    render_plan,
 )
 from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
 from orca.tui.views import ConversationView, InspectorView, ReviewView
@@ -98,6 +101,19 @@ class OrcaApp(App[None]):
         scrollbar-color: $surface-lighten-2;
         scrollbar-color-hover: $primary;
         background: $background;
+    }
+
+    #plan {
+        width: 100%;
+        height: auto;
+        max-height: 9;
+        padding: 0 1;
+        border-top: solid $surface-lighten-2;
+        display: none;
+    }
+
+    #plan.visible {
+        display: block;
     }
 
     #interaction {
@@ -221,6 +237,7 @@ class OrcaApp(App[None]):
                 yield ConversationView(id=ViewId.CONVERSATION.value, classes="main-view")
                 yield ReviewView(id=ViewId.REVIEW.value, classes="main-view")
                 yield InspectorView(id=ViewId.INSPECTOR.value, classes="main-view")
+            yield Static(id="plan")
             yield Static(id="interaction")
             with Horizontal(id="composer-frame"):
                 yield Static("›", id="composer-prompt")
@@ -230,6 +247,8 @@ class OrcaApp(App[None]):
     def on_mount(self) -> None:
         self._shell_ready = True
         self.apply_model_action(ViewportChanged(self.size.width, self.size.height))
+        # Half a second: one spinner frame, and elapsed time that reads as live.
+        _ = self.set_interval(0.5, self._tick)
         self.run_worker(
             self._boot(),
             name="bootstrap",
@@ -243,6 +262,10 @@ class OrcaApp(App[None]):
             return
         self._closing = True
         await self.backend.close()
+
+    def _tick(self) -> None:
+        if self.model.working:
+            self.apply_model_action(ClockTicked(time.monotonic()))
 
     def on_resize(self, event: events.Resize) -> None:
         self.apply_model_action(ViewportChanged(event.size.width, event.size.height))
@@ -294,6 +317,11 @@ class OrcaApp(App[None]):
         host = self.query_one("#view-host", ContentSwitcher)
         host.current = self.model.view.value
         self.query_one(f"#{self.model.view.value}", RenderedView).update_state(self.model)
+
+        plan = self.query_one("#plan", Static)
+        pinned = render_plan(self.model, width=max(1, width - 2))
+        plan.set_class(pinned is not None, "visible")
+        plan.update(pinned or "")
 
         interaction = self.query_one("#interaction", Static)
         inline_interaction = (
@@ -425,7 +453,7 @@ class OrcaApp(App[None]):
         except BackendError as exc:
             self.apply_model_action(OperationFailed(str(exc)))
             return
-        self.apply_model_action(RunAccepted(info.run_id, info.thread_id))
+        self.apply_model_action(RunAccepted(info.run_id, info.thread_id, time.monotonic()))
         self.run_worker(
             self._follow(info.run_id, after_seq=0),
             name=f"stream:{info.run_id}",

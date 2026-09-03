@@ -105,7 +105,7 @@ class ArtifactOffer:
 #: Something that happened to a turn that is neither activity nor answer: the context was
 #: handed off to a summary, the person steered the run, a folder was added. Orca's own
 #: vocabulary, so it is closed.
-TurnNoteKind = Literal["compaction", "steer", "folder"]
+TurnNoteKind = Literal["compaction", "steer", "folder", "approval", "ended"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +177,16 @@ class Notice:
 
 
 @dataclass(frozen=True, slots=True)
+class Usage:
+    """How full the context is, as the backend measured its last request."""
+
+    tokens: int
+    context_window: int
+    #: The backend's estimate rather than the endpoint's own count.
+    estimated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class AppState:
     """Complete semantic state of one interactive client process."""
 
@@ -206,6 +216,12 @@ class AppState:
     developer_cursor: int = 0
     developer_events: tuple[str, ...] = ()
     notices: tuple[Notice, ...] = ()
+    #: When the active run was accepted and the clock now, both on the same monotonic
+    #: scale, so a renderer can show elapsed time without reading a clock of its own. Zero
+    #: when unknown -- a run picked up from history was accepted before this process began.
+    run_started_at: float = 0.0
+    clock: float = 0.0
+    usage: Usage | None = None
     viewport_width: int = 100
     viewport_height: int = 30
 

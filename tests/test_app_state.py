@@ -6,6 +6,8 @@ from dataclasses import replace
 
 from orca.app.actions import (
     Back,
+    ClockTicked,
+    CommandCompleted,
     CommandInvoked,
     ComposerSubmitted,
     Connected,
@@ -26,10 +28,11 @@ from orca.app.model import (
     TaskEvent,
     ThreadReplay,
     TurnNote,
+    Usage,
     ViewId,
 )
 from orca.app.update import AddFolder, FollowRun, LoadThread, SendRunCommand, reduce
-from orca.backend import Answer
+from orca.backend import Answer, CommandOutcome
 from orca.json_types import JsonObject
 
 
@@ -520,3 +523,68 @@ def test_a_call_that_wrote_code_carries_it_and_an_upsert_keeps_it() -> None:
     (row,) = state.turns[-1].progress
     assert row.status == "completed"
     assert row.snippets == (Snippet("src/app.py", "", "print('hi')\n"),)
+
+
+def test_a_cancelled_run_keeps_what_the_model_said_and_says_where_it_stopped() -> None:
+    """A cancel used to replace the narration with "Cancelled." and leave the tool rows, so
+    a person saw a list of calls and none of the words around them."""
+    state = feed(
+        _running(),
+        _delta(2, "Reading the router."),
+        _call(3, "ls", "completed"),
+        _delta(4, "\n\nNow editing."),
+        event(5, "run.cancelled", {"summary": "Cancelled."}),
+    )
+
+    turn = state.turns[-1]
+    assert turn.status == "cancelled"
+    assert turn.answer == "Reading the router.\n\nNow editing."
+    assert turn.timeline == (
+        Narration("Reading the router."),
+        Activity("ls"),
+        Narration("\n\nNow editing."),
+        TurnNote("ended", "Cancelled."),
+    )
+
+
+def test_an_approval_decision_lands_in_the_transcript_not_a_notice() -> None:
+    state = feed(
+        _running(),
+        event(
+            2,
+            "approval.requested",
+            {"approval_id": "a1", "title": "run: pytest", "allowed_decisions": ["approve"]},
+        ),
+        event(3, "approval.resolved", {"approval_id": "a1", "decision": "allow_always"}),
+    )
+    assert state.interaction is None
+    assert state.turns[-1].notes == (
+        TurnNote("approval", "Approved, and always from now on: run: pytest"),
+    )
+
+    quiet = reduce(state, CommandCompleted("resolveapproval", CommandOutcome("allow_always")))
+    assert quiet.state.notices == ()
+
+
+def test_a_run_carries_its_clock_and_a_new_turn_clears_old_notices() -> None:
+    noticed = reduce(AppState(), CommandInvoked("add", "")).state
+    assert noticed.notices
+
+    accepted = reduce(noticed, RunAccepted("run-1", "thread-1", 100.0)).state
+    ticked = reduce(accepted, ClockTicked(107.5)).state
+
+    assert accepted.notices == ()
+    assert (accepted.run_started_at, accepted.clock) == (100.0, 100.0)
+    assert ticked.clock == 107.5
+
+
+def test_usage_is_read_from_the_backend_and_reset_with_the_conversation() -> None:
+    state = feed(
+        _running(),
+        event(2, "context.usage", {"tokens": 1200, "context_window": 8000, "estimated": True}),
+    )
+    assert state.usage == Usage(1200, 8000, estimated=True)
+
+    finished = feed(state, event(3, "run.completed", {"summary": "Done."}))
+    assert finished.usage == Usage(1200, 8000, estimated=True)
+    assert reduce(finished, CommandInvoked("new", "")).state.usage is None

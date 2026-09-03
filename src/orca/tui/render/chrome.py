@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.text import Text
 
 from orca.app.commands import visible_commands
-from orca.app.model import AppState, RunStatus
+from orca.app.model import AppState, RunStatus, Usage
 from orca.tui.render.code import code_block
 from orca.tui.render.theme import (
     ACCENT,
@@ -107,6 +107,8 @@ def render_footer(state: AppState) -> Text:
         "review": "esc back · /chat conversation",
         "inspector": "developer view · esc back",
     }[state.view.value]
+    if state.usage is not None and state.view.value == "conversation":
+        left += f" · {_usage_label(state.usage)}"
     right = "ctrl+p commands"
     width = max(1, state.viewport_width - 2)
     if width < len(right) + 6:
@@ -145,6 +147,21 @@ def render_help(*, developer: bool = False) -> RenderableType:
 #: Lines of code shown on an approval before the rest is elided. The card scrolls, so this
 #: is about a person finding the choices, not about fitting a screen.
 _APPROVAL_LINES = 120
+
+
+def _usage_label(usage: Usage) -> str:
+    """`12.3k / 262k tokens`, with `≈` when the backend estimated rather than measured."""
+    share = f" ({usage.tokens * 100 // usage.context_window}%)" if usage.context_window else ""
+    mark = "≈" if usage.estimated else ""
+    return f"{mark}{_compact(usage.tokens)} / {_compact(usage.context_window)} tokens{share}"
+
+
+def _compact(count: int) -> str:
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 1_000:
+        return f"{count / 1_000:.1f}k"
+    return str(count)
 
 
 def _folder_name(path: str) -> str:

@@ -12,6 +12,7 @@ from orca.app.actions import (
     Action,
     ApprovalDecided,
     Back,
+    ClockTicked,
     CommandCompleted,
     CommandInvoked,
     ComposerChanged,
@@ -46,6 +47,7 @@ from orca.app.model import (
     TurnNote,
     TurnNoteKind,
     TurnState,
+    Usage,
     ViewId,
 )
 from orca.backend import (
@@ -147,6 +149,7 @@ def reduce(state: AppState, action: Action) -> Transition:
                 "developer_cursor": 0,
                 "developer_events": (),
                 "folders": (),
+                "usage": None,
             }
             if action.reset_conversation
             else {}
@@ -237,8 +240,14 @@ def reduce(state: AppState, action: Action) -> Transition:
                 interaction=None,
                 developer_cursor=0,
                 developer_events=(),
+                # A new turn is a new page: what was said about the last one has been read.
+                notices=(),
+                run_started_at=action.started_at,
+                clock=action.started_at,
             )
         )
+    if isinstance(action, ClockTicked):
+        return Transition(replace(state, clock=action.now))
     if isinstance(action, OperationFailed):
         return Transition(_notice(replace(state, submitting=False), action.message, "error"))
     if isinstance(action, EventReceived):
@@ -262,6 +271,7 @@ def reduce(state: AppState, action: Action) -> Transition:
             developer_cursor=0,
             developer_events=(),
             folders=(),
+            usage=None,
         )
         for run in action.runs:
             replayed = reduce(
@@ -339,6 +349,10 @@ def reduce(state: AppState, action: Action) -> Transition:
         )
     match action:
         case CommandCompleted():
+            if action.command in {"resolveapproval", "answer"}:
+                # The decision is already in the transcript, where `approval.resolved`
+                # put it; a notice beside it would say the same thing twice and stay.
+                return Transition(state)
             return Transition(
                 _notice(state, f"{action.command}: {action.outcome.status or 'sent'}")
             )
@@ -387,6 +401,7 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
                 developer_cursor=0,
                 developer_events=(),
                 folders=(),
+                usage=None,
             )
         )
     if name == "add":
@@ -582,8 +597,25 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             replace(state, interaction=interaction, run_status=RunStatus.AWAITING_INPUT)
         )
 
-    if kind in {"approval.resolved", "question.resolved"}:
+    if kind == "approval.resolved":
+        # Into the transcript, at the point it was decided, rather than a notice that stays
+        # at the bottom after the run has moved on.
+        decided = replace(state, interaction=None, run_status=RunStatus.RUNNING)
+        asked = state.interaction
+        title = asked.title if asked is not None and asked.kind == "approval" else ""
+        verdict = _decision_label(_string(payload, "decision"))
+        return Transition(_note(decided, "approval", f"{verdict}: {title}" if title else verdict))
+
+    if kind == "question.resolved":
         return Transition(replace(state, interaction=None, run_status=RunStatus.RUNNING))
+
+    if kind == "context.usage":
+        tokens, window = payload.get("tokens"), payload.get("context_window")
+        if not isinstance(tokens, int) or not isinstance(window, int):
+            return Transition(state)
+        return Transition(
+            replace(state, usage=Usage(tokens, window, payload.get("estimated") is True))
+        )
 
     if kind == "context.compacted":
         # A `user` row on purpose: the agent now works from a summary, which is the honest
@@ -622,17 +654,26 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
     if terminal is not None:
         turn = _latest_turn(state)
         summary = _string(payload, "summary")
-        # The summary replaces what was streamed. When it is the streamed text -- which is
-        # what the harness sends -- the turn keeps its shape, words and tool calls in the
-        # order they happened; otherwise the narration is replaced by the summary, whole.
         timeline = turn.timeline
-        if summary != turn.provisional_answer:
-            timeline = _without_narration(timeline)
+        if terminal is RunStatus.COMPLETED:
+            # The summary replaces what was streamed. When it is the streamed text -- which
+            # is what the harness sends -- the turn keeps its shape, words and tool calls in
+            # the order they happened; otherwise the narration is replaced by the summary.
+            answer = summary
+            if summary != turn.provisional_answer:
+                timeline = _without_narration(timeline)
+                if summary:
+                    timeline = (*timeline, Narration(summary))
+        else:
+            # A cancel or a failure says why the run stopped, not what it answered. What
+            # the model said stays -- a cancelled run used to lose every word and keep
+            # only its tool rows -- and the reason lands where the run ended.
+            answer = turn.provisional_answer
             if summary:
-                timeline = (*timeline, Narration(summary))
+                timeline = (*timeline, TurnNote("ended", summary))
         turn = replace(
             turn,
-            answer=summary,
+            answer=answer,
             provisional_answer="",
             status=terminal.value,
             timeline=timeline,
@@ -724,6 +765,15 @@ def _snippets(arguments: JsonObject) -> tuple[Snippet, ...]:
         )
         return (Snippet(path or "edit", "diff", change),)
     return ()
+
+
+def _decision_label(decision: str) -> str:
+    """The backend's decision word, as a person would say it. Unknown words pass through."""
+    return {
+        "allow": "Approved",
+        "allow_always": "Approved, and always from now on",
+        "deny": "Rejected",
+    }.get(decision, decision or "Decided")
 
 
 def _chosen_option(options: tuple[str, ...], text: str) -> str:

@@ -43,8 +43,9 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 padding=(0, 1),
             )
         )
-        if turn.plan:
+        if turn.plan and not _pinned(state, turn):
             # Intent frames activity; the active step is the checklist's only prominent line.
+            # The active turn's plan is pinned above the composer instead, by `render_plan`.
             rows.append(Padding(_plan_checklist(turn), (0, 1)))
         by_id = {item.update_id: item for item in turn.progress}
         narrated = False
@@ -67,8 +68,8 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 rows.append(Padding(answer_markdown(segment.text), (0, 1)))
             elif isinstance(segment, TurnNote):
                 rows.append(Padding(_note_row(segment), (0, 1)))
-        if not narrated and turn.status in {"queued", "running"}:
-            rows.append(Padding(Text("● Working", style=f"bold {ACCENT}"), (0, 1)))
+        if turn.run_id == state.active_run_id and state.working:
+            rows.append(Padding(_working(state), (1, 1, 0, 1)))
         for artifact in turn.artifacts:
             label = artifact.reference or artifact.artifact_id
             rows.append(
@@ -79,8 +80,46 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
             )
     if state.notices:
         rows.append(Text(""))
-        rows.extend(notice_row(notice) for notice in state.notices[-2:])
+        rows.append(notice_row(state.notices[-1]))
     return Group(*rows) if rows else Text("")
+
+
+def render_plan(state: AppState, *, width: int) -> RenderableType | None:
+    """The active turn's checklist, for the strip above the composer. None when there is no
+    run going or it has no plan."""
+    del width
+    if not state.turns:
+        return None
+    turn = state.turns[-1]
+    if not _pinned(state, turn):
+        return None
+    return Group(Text("PLAN", style=f"bold {MUTED}"), _plan_checklist(turn))
+
+
+def _pinned(state: AppState, turn: TurnState) -> bool:
+    return bool(turn.plan) and state.working and turn.run_id == state.active_run_id
+
+
+#: A spinner that advances with the clock: one frame per tick of the host's timer.
+_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _working(state: AppState) -> Text:
+    frame = _FRAMES[int(state.clock * 2) % len(_FRAMES)]
+    label = state.run_status.value.replace("_", " ").capitalize()
+    text = Text.assemble((f"{frame} ", f"bold {ACCENT}"), (label, f"bold {ACCENT}"))
+    if state.run_started_at > 0:
+        text.append(f" · {_elapsed(max(0.0, state.clock - state.run_started_at))}", style=MUTED)
+    return text
+
+
+def _elapsed(seconds: float) -> str:
+    whole = int(seconds)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m {whole % 60:02d}s"
+    return f"{whole // 3600}h {(whole % 3600) // 60:02d}m"
 
 
 def render_review(state: AppState, *, width: int) -> RenderableType:
@@ -193,8 +232,11 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
 
 
 def _note_row(note: TurnNote) -> Text:
-    glyph = {"compaction": "⇥", "steer": "↳", "folder": "+"}[note.kind]
-    return Text.assemble((f"{glyph} ", ACCENT), (note.text, f"italic {MUTED}"))
+    glyph = {"compaction": "⇥", "steer": "↳", "folder": "+", "approval": "✓", "ended": "■"}[
+        note.kind
+    ]
+    style = WARNING if note.kind == "ended" else ACCENT
+    return Text.assemble((f"{glyph} ", style), (note.text, f"italic {MUTED}"))
 
 
 def notice_row(notice: Notice) -> Text:
