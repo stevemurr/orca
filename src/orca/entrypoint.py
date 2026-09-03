@@ -187,8 +187,7 @@ def launch_tui(
 
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         error_console.print(
-            "[yellow]Interactive mode needs a terminal.[/yellow] "
-            'Use [bold]orca run "…"[/bold] for scripts.'
+            '[yellow]Interactive mode needs a terminal.[/yellow] Try [bold]orca run "…"[/bold].'
         )
         raise typer.Exit(2)
     try:
