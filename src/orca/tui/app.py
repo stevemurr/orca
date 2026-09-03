@@ -280,8 +280,8 @@ class OrcaApp(App[None]):
     def on_mount(self) -> None:
         self._shell_ready = True
         self.apply_model_action(ViewportChanged(self.size.width, self.size.height))
-        # Half a second: one spinner frame, and elapsed time that reads as live.
-        _ = self.set_interval(0.5, self._tick)
+        # Fast enough for a shine to move; `_tick` slows itself when nothing needs that.
+        _ = self.set_interval(0.08, self._tick)
         self.run_worker(
             self._boot(),
             name="bootstrap",
@@ -298,9 +298,20 @@ class OrcaApp(App[None]):
 
     def _tick(self) -> None:
         # While a run goes, for the spinner and the elapsed time; while a notice shows, so
-        # it can go away. Otherwise nothing on screen depends on the clock.
-        if self.model.working or self.model.notices:
-            self.apply_model_action(ClockTicked(time.monotonic()))
+        # it can go away. Otherwise nothing on screen depends on the clock. A working tool
+        # row carries a shine that has to move every frame; the rest reads fine at two a
+        # second, and a transcript is not re-rendered faster than it needs to be.
+        if not (self.model.working or self.model.notices):
+            return
+        now = time.monotonic()
+        if not self._tool_working() and now - self.model.clock < 0.5:
+            return
+        self.apply_model_action(ClockTicked(now))
+
+    def _tool_working(self) -> bool:
+        if not self.model.working or not self.model.turns:
+            return False
+        return any(item.status.lower() == "active" for item in self.model.turns[-1].progress)
 
     def on_resize(self, event: events.Resize) -> None:
         self.apply_model_action(ViewportChanged(event.size.width, event.size.height))

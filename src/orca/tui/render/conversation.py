@@ -58,7 +58,7 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 # Consecutive rows share one table so their glyphs line up.
                 # A blank line either side: rows sit between paragraphs of the model's
                 # own words, and against them they read as part of the sentence.
-                rows.append(Padding(_activity_table(pending, state.tools_expanded), (1, 1)))
+                rows.append(Padding(_activity_table(pending, state), (1, 1)))
                 pending = []
             if isinstance(segment, Narration):
                 if not narrated:
@@ -98,6 +98,31 @@ def _pinned(state: AppState, turn: TurnState) -> bool:
 
 #: A spinner that advances with the clock: one frame per tick of the host's timer.
 _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+#: How far the shine on a working tool row moves per second, in cells, and how wide it is.
+_SHINE_SPEED = 24.0
+_SHINE_WIDTH = 7
+
+
+def shimmer(text: str, clock: float) -> Text:
+    """The text with a band of light sweeping across it, placed by the clock.
+
+    The row a person is watching, lit the way an editor's agent lights the call it is on:
+    the same words, muted, with a few brighter cells that move left to right and wrap. Pure
+    in the clock, so a still frame is a still frame and a test can pin one.
+    """
+    line = Text(text, style=MUTED)
+    if not text:
+        return line
+    span = len(text) + _SHINE_WIDTH
+    head = int(clock * _SHINE_SPEED) % span - _SHINE_WIDTH
+    for offset in range(_SHINE_WIDTH):
+        cell = head + offset
+        if 0 <= cell < len(text):
+            # Brightest at the centre of the band, accent at its edges.
+            centre = abs(offset - _SHINE_WIDTH // 2)
+            line.stylize("bold white" if centre <= 1 else f"bold {ACCENT}", cell, cell + 1)
+    return line
 
 
 def _working(state: AppState) -> Text:
@@ -153,17 +178,21 @@ def _timeline(turn: TurnState) -> tuple[Segment, ...]:
     return (*rows, *turn.notes, *((Narration(answer),) if answer else ()))
 
 
-def _activity_table(items: list[ProgressItem], expanded: bool) -> RenderableType:
+def _activity_table(items: list[ProgressItem], state: AppState) -> RenderableType:
     """A run of tool calls. Folded, it is the latest call and a count -- the one a person
     is watching, and how much came before it; `/tools` or Ctrl+T shows them all."""
     activity = Table.grid(padding=(0, 1))
     activity.add_column(width=2, no_wrap=True)
     activity.add_column(ratio=1, overflow="fold")
-    shown = items if expanded or len(items) == 1 else items[-1:]
+    shown = items if state.tools_expanded or len(items) == 1 else items[-1:]
     folded = len(items) - len(shown)
     for item in shown:
         glyph, style, text_style = _activity_look(item)
-        line = Text(item.text, style=text_style)
+        line = (
+            shimmer(item.text, state.clock)
+            if item.status.lower() == "active" and state.working
+            else Text(item.text, style=text_style)
+        )
         if folded:
             line.append(f"  ·  {folded + 1} tool calls ›", style=MUTED)
         activity.add_row(Text(glyph, style=style), line)

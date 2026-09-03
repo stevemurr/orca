@@ -405,3 +405,15 @@ def test_a_notice_shows_for_a_moment_and_then_goes() -> None:
 
     assert fresh is not None and "Approved: run: pytest" in plain(fresh, width=90)
     assert stale is None
+
+
+def test_the_working_tool_row_carries_a_shine_that_moves_with_the_clock() -> None:
+    from orca.tui.render.conversation import shimmer
+
+    early = shimmer("read src/app.py", 0.3)
+    later = shimmer("read src/app.py", 0.5)
+
+    assert early.plain == later.plain == "read src/app.py"
+    lit_early = {span.start for span in early.spans if "white" in str(span.style)}
+    lit_later = {span.start for span in later.spans if "white" in str(span.style)}
+    assert lit_early and lit_later and lit_early != lit_later
