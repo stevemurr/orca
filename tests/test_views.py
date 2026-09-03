@@ -10,6 +10,7 @@ from rich.console import Console, RenderableType
 
 from orca.app.model import (
     AppState,
+    Choice,
     PlanStep,
     ProgressItem,
     RunStatus,
@@ -270,7 +271,7 @@ def test_the_active_turn_shows_a_spinner_and_how_long_it_has_run() -> None:
     )
 
     assert "Running · 1m 15s" in rendered
-    assert "≈12.3k / 262.1k tokens (4%)" in footer
+    assert "━━━━━━━━━━  ≈4% of 262.1k" in footer
 
 
 def test_the_footer_names_the_folder_and_what_the_conversation_reaches_beyond_it() -> None:
@@ -280,6 +281,119 @@ def test_the_footer_names_the_folder_and_what_the_conversation_reaches_beyond_it
 
     assert "~/Code/orca + orca, lib   normal · ask" in rendered
     assert "~/Code/orca" not in plain(render_header(state, width=100), width=100)
+
+
+def test_a_live_turn_splits_where_its_last_tool_group_begins() -> None:
+    """The head keeps its key across ticks; the tail holds the shining group and the
+    spinner, so a tick renders those lines and not the code above them."""
+    from orca.app.model import Activity, Narration
+    from orca.tui.render.conversation import render_live_turn
+
+    turn = TurnState(
+        "run-1",
+        request="Fix it",
+        progress=(
+            ProgressItem("a", "read x", "completed", kind="read"),
+            ProgressItem("b", "edit x", "active", kind="edit"),
+        ),
+        timeline=(Narration("First, a look."), Activity("a"), Narration("Now."), Activity("b")),
+    )
+    state = replace(populated_state(), turns=(turn,), active_run_id="run-1", clock=1.0)
+
+    (key, head), (tail_key, tail) = render_live_turn(state, turn, width=90)
+    head_text, tail_text = plain(head, width=90), plain(tail, width=90)
+    assert "First, a look." in head_text and "read x" in head_text and "Now." in head_text
+    assert "edit x" in tail_text and "Running" in tail_text
+    assert "edit x" not in head_text and "Running" not in head_text
+    assert tail_key is None
+
+    later = replace(state, clock=2.0)
+    assert render_live_turn(later, turn, width=90)[0][0] == key
+
+    # Words being written at the end are a piece of their own: a delta changes its key
+    # and leaves the head's alone, so the code above it is not drawn again for a word.
+    writing = replace(turn, timeline=(*turn.timeline, Narration("Done so")))
+    (head_key, _), (stream_key, stream), (_, _) = render_live_turn(state, writing, width=90)
+    assert "Done so" in plain(stream, width=90)
+    more = replace(turn, timeline=(*turn.timeline, Narration("Done so far.")))
+    (head_again, _), (stream_again, _), _ = render_live_turn(state, more, width=90)
+    assert head_again == head_key
+    assert stream_again != stream_key
+
+
+def test_the_command_menu_slides_to_keep_the_highlighted_row_in_view() -> None:
+    from orca.app.commands import suggest
+    from orca.tui.render import render_command_menu
+
+    rows = suggest("/", skills=(Choice("deploy", "Ship a release."),))
+    assert len(rows) > 9
+
+    top = plain(render_command_menu(rows, 0), width=90)
+    assert "/chat" in top and "/deploy" not in top
+    assert "below" in top
+
+    last = plain(render_command_menu(rows, len(rows) - 1), width=90)
+    deploy = next(line for line in last.splitlines() if "/deploy" in line)
+    assert deploy.strip().startswith("›") and "/chat" not in last
+    assert "above" in last
+
+
+def test_a_tool_row_reads_as_prose_with_its_argument_beside_it_in_a_card() -> None:
+    turn = TurnState(
+        "run-1",
+        request="Look",
+        progress=(
+            ProgressItem("r", "read src/app.py", "completed", kind="read", tool="read_file"),
+            ProgressItem(
+                "x", "run: ls", "completed", kind="execute", tool="run", detail="uv run pytest -q"
+            ),
+            ProgressItem("m", "files__list {}", "completed", kind="other"),
+            ProgressItem("k", "skill: deploy", "completed", kind="skill", tool="use_skill"),
+        ),
+    )
+    state = replace(populated_state(), turns=(turn,), tools_expanded=True)
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+
+    assert "ReadFile" in rendered
+    assert "◈  UseSkill" in rendered
+    assert "›_ Run uv run pytest -q" in rendered
+    # No tool named: the backend's own summary, as before.
+    assert "files__list {}" in rendered
+    # The card's rounded corners.
+    assert "╭" in rendered and "╰" in rendered
+
+
+def test_a_call_that_wrote_code_stays_in_the_fold_with_its_code() -> None:
+    from orca.app.model import Snippet
+
+    turn = TurnState(
+        "run-1",
+        request="Write it",
+        progress=(
+            ProgressItem("r", "read app.py", "completed", kind="read"),
+            ProgressItem(
+                "w",
+                "write app.py",
+                "completed",
+                (Snippet("app.py", "python", "print('hi')\n"),),
+                kind="edit",
+            ),
+            ProgressItem("t", "run: pytest", "completed", kind="execute"),
+        ),
+    )
+    state = replace(populated_state(), turns=(turn,))
+
+    rendered = plain(render_conversation(state, width=90), width=90)
+
+    # The read folds away; the write stays with its code, and the latest call carries the
+    # count below it.
+    assert "read app.py" not in rendered
+    assert "write app.py" in rendered
+    assert "print('hi')" in rendered
+    assert "run: pytest  ·  3 tool calls ›" in rendered
+    assert rendered.index("print('hi')") < rendered.index("run: pytest")
+    assert rendered.count("tool calls ›") == 1
 
 
 def test_the_transcript_shows_a_tool_call_where_it_happened() -> None:
@@ -389,6 +503,7 @@ def test_a_run_of_tool_calls_folds_to_the_latest_and_a_count() -> None:
     loud = plain(render_conversation(opened, width=90), width=90)
 
     assert "read file7.py  ·  8 tool calls ›" in quiet
+    assert quiet.count("tool calls ›") == 1
     assert "read file0.py" not in quiet
     assert "read file0.py" in loud and "read file7.py" in loud
     assert "tool calls ›" not in loud
@@ -505,3 +620,41 @@ def test_a_message_sent_mid_run_is_quoted_in_the_transcript_where_it_arrived() -
     assert "mid-run" not in rendered
     steer = rendered.index("Use the new tokenizer")
     assert rendered.index("read parser.py") < steer < rendered.index("Switching.")
+    # A blank line between the steer and the words that answer it, as between any two
+    # blocks of words; the tool rows above it bring their own.
+    lines = [line.rstrip() for line in rendered.splitlines()]
+    at = next(index for index, line in enumerate(lines) if "Use the new tokenizer" in line)
+    assert lines[at + 1] == ""
+    assert "Switching." in lines[at + 2]
+
+
+def test_the_agents_view_and_strip_show_a_delegated_agent() -> None:
+    from orca.app.model import AgentState, ProgressItem, TurnState
+    from orca.tui.render import render_agents, render_conversation
+
+    agent = AgentState(
+        agent_id="agent_1",
+        task="search the web for the hang",
+        started_at=10.0,
+        progress=(
+            ProgressItem(
+                "c1",
+                "search",
+                "active",
+                tool="web_search",
+                detail="xctest hang",
+                agent_id="agent_1",
+            ),
+        ),
+        said=("Let me search for that.",),
+    )
+    turn = TurnState(run_id="run-1", request="find the hang", agents=(agent,))
+    state = AppState(turns=(turn,), active_run_id="run-1", run_status=RunStatus.RUNNING, clock=25.0)
+
+    strip = plain(render_conversation(state, width=100), width=100)
+    view = plain(render_agents(state, width=100), width=100)
+
+    assert "agent_1" in strip and "search the web for the hang" in strip and "15s" in strip
+    assert "WebSearch xctest hang" in strip
+    assert "agent_1" in view and "running" in view and "Let me search for that." in view
+    assert "xctest hang" in view

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Literal, cast
 
 from orca.json_types import JsonObject
 
@@ -13,6 +13,7 @@ class ViewId(str, Enum):
     CONVERSATION = "conversation"
     REVIEW = "review"
     INSPECTOR = "inspector"
+    AGENTS = "agents"
 
 
 class RunStatus(str, Enum):
@@ -83,6 +84,44 @@ class ProgressItem:
     #: `think`, `switch_mode` -- in the backend's words. Empty when it did not say. An
     #: open vocabulary: a kind orca has no icon for gets the plain one.
     kind: str = ""
+    #: The tool's name as the backend calls it -- `read_file`, `run` -- and the one
+    #: argument that says what it was pointed at: a path, a command, a query. Shown as
+    #: `ReadFile src/app.py`, the name as prose and the argument beside it; `text` is
+    #: the backend's own one-line summary and is what a row shows when it named no tool.
+    tool: str = ""
+    detail: str = ""
+    #: The delegated agent whose call this is, or empty for the run's own agent. A row
+    #: with one belongs to that agent, not to the turn's timeline.
+    agent_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentState:
+    """One delegated agent, as a thing with a life of its own.
+
+    The backend used to send a child's tool calls as rows with its id in their text, and
+    its words as the parent's own answer -- so a person watching saw the parent doing the
+    child's work. Now the child's rows carry its id, its words arrive as `agent.said`, and
+    `agent.started` and `agent.finished` bound its life, which is what lets it be drawn
+    as itself. (2026-09-03)
+    """
+
+    agent_id: str
+    task: str = ""
+    #: `running`, `finished`, `failed` or `stopped`: the backend's word, kept as it came.
+    status: str = "running"
+    #: On the same clock as `AppState.clock`; zero when it started before this process.
+    started_at: float = 0.0
+    seconds: float = 0.0
+    turns: int = 0
+    answer: str = ""
+    #: What it said as it went: its narration and its reports, in order.
+    said: tuple[str, ...] = ()
+    progress: tuple[ProgressItem, ...] = ()
+
+    @property
+    def running(self) -> bool:
+        return self.status == "running"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +148,7 @@ class ArtifactOffer:
 #: Something that happened to a turn that is neither activity nor answer: the context was
 #: handed off to a summary, the person steered the run, a folder was added. Orca's own
 #: vocabulary, so it is closed.
-TurnNoteKind = Literal["compaction", "steer", "folder", "ended"]
+TurnNoteKind = Literal["compaction", "steer", "folder", "ended", "agent"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +195,8 @@ class TurnState:
     plan_explanation: str = ""
     notes: tuple[TurnNote, ...] = ()
     timeline: tuple[Segment, ...] = ()
+    #: The agents this turn delegated to, in the order they started.
+    agents: tuple[AgentState, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +244,25 @@ class Choice:
     name: str
     summary: str = ""
 
+    @staticmethod
+    def parse_all(value: object) -> tuple[Choice, ...]:
+        """Choices from a wire list: a bare name, or a name with a summary. An entry of
+        another shape is dropped, as every unknown thing from a backend is, and a list
+        that is not a list is nothing at all."""
+        if not isinstance(value, list):
+            return ()
+        found: list[Choice] = []
+        for item in cast("list[object]", value):
+            if isinstance(item, str) and item:
+                found.append(Choice(item))
+            elif isinstance(item, dict):
+                entry = cast("dict[str, object]", item)
+                name = entry.get("name")
+                summary = entry.get("summary")
+                if isinstance(name, str) and name:
+                    found.append(Choice(name, summary if isinstance(summary, str) else ""))
+        return tuple(found)
+
 
 @dataclass(frozen=True, slots=True)
 class Usage:
@@ -238,6 +298,9 @@ class AppState:
     #: What the backend said `mode` and `policy` may be; empty when it did not say.
     modes: tuple[Choice, ...] = ()
     policies: tuple[Choice, ...] = ()
+    #: The skills the workspace offers, for the `/` menu: a `/name` that is one is sent
+    #: as written, and the backend reads the skill's instructions as the request.
+    skills: tuple[Choice, ...] = ()
     run_status: RunStatus = RunStatus.IDLE
     turns: tuple[TurnState, ...] = ()
     interaction: InteractionState | None = None

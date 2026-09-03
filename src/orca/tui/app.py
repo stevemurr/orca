@@ -70,7 +70,7 @@ from orca.tui.render.theme import (
     WARNING,
 )
 from orca.tui.screens import HelpScreen, ThreadPickerScreen
-from orca.tui.views import ConversationView, InspectorView, ReviewView
+from orca.tui.views import AgentsView, ConversationView, InspectorView, ReviewView
 from orca.tui.views.base import StateView
 from orca.tui.widgets import Composer
 
@@ -122,10 +122,12 @@ class OrcaApp(App[None]):
         height: 100%;
     }
 
+    /* A line of air above the wordmark: on the terminal's first row it read as part of
+       the window chrome rather than as the app's own title. */
     #app-header {
         width: 100%;
-        height: 2;
-        padding: 0 1;
+        height: 3;
+        padding: 1 1 0 1;
         border-bottom: solid $surface-lighten-1;
     }
 
@@ -137,7 +139,8 @@ class OrcaApp(App[None]):
     .main-view {
         width: 100%;
         height: 100%;
-        padding: 1 1 0 1;
+        /* A line of air below the last row, so the transcript does not sit on the input. */
+        padding: 1 1 1 1;
         scrollbar-size-vertical: 1;
         scrollbar-color: $surface-lighten-2;
         scrollbar-color-hover: $primary;
@@ -171,7 +174,8 @@ class OrcaApp(App[None]):
     #command-menu {
         width: 100%;
         height: auto;
-        max-height: 9;
+        /* Eight rows and the line that says how many more, under the border. */
+        max-height: 10;
         padding: 0 2;
         border-top: solid $surface-lighten-1;
         display: none;
@@ -300,8 +304,18 @@ class OrcaApp(App[None]):
     }
     """
 
-    def __init__(self, backend: TerminalBackend, *, initial: AppState | None = None) -> None:
+    def __init__(
+        self,
+        backend: TerminalBackend,
+        *,
+        initial: AppState | None = None,
+        resume: bool = False,
+    ) -> None:
         super().__init__()
+        #: Open on the recent conversations, for `orca --resume`: the picker `/threads`
+        #: opens, shown as soon as the connection is up, so picking up where one left
+        #: off is one flag and one Enter rather than a command typed into a fresh shell.
+        self._resume_on_start: bool = resume
         self.register_theme(ORCA_THEME)
         self.theme = ORCA_THEME.name  # pyright: ignore[reportUnannotatedClassAttribute]
         self.backend: TerminalBackend = backend
@@ -320,6 +334,8 @@ class OrcaApp(App[None]):
         self._reported_draft: str = ""
         #: Whether a render is waiting for the loop to go idle; see `_render_soon`.
         self._render_queued: bool = False
+        #: What the shell around the transcript was last drawn from; see `_chrome_key`.
+        self._chrome_shown: tuple[object, ...] | None = None
 
     @override
     def compose(self) -> ComposeResult:
@@ -329,6 +345,7 @@ class OrcaApp(App[None]):
                 yield ConversationView(id=ViewId.CONVERSATION.value, classes="main-view")
                 yield ReviewView(id=ViewId.REVIEW.value, classes="main-view")
                 yield InspectorView(id=ViewId.INSPECTOR.value, classes="main-view")
+                yield AgentsView(id=ViewId.AGENTS.value, classes="main-view")
             yield Static(id="plan")
             yield Static(id="interaction")
             yield Static(id="notice")
@@ -396,7 +413,7 @@ class OrcaApp(App[None]):
         elif isinstance(action, EventReceived | ClockTicked):
             self._render_soon()
         else:
-            self._render_model()
+            self._render_model(chrome=True)
         for effect in transition.effects:
             self._perform(effect)
 
@@ -423,7 +440,10 @@ class OrcaApp(App[None]):
 
     def _suggestions(self) -> tuple[Suggestion, ...]:
         return suggest(
-            self.model.composer_draft, developer=self.model.developer, choices=self._choices()
+            self.model.composer_draft,
+            developer=self.model.developer,
+            choices=self._choices(),
+            skills=self.model.skills,
         )
 
     def _render_menu(self) -> None:
@@ -524,21 +544,58 @@ class OrcaApp(App[None]):
 
     def _render_queued_model(self) -> None:
         self._render_queued = False
-        self._render_model()
+        self._render_model(chrome=False)
 
-    def _render_model(self) -> None:
+    def _chrome_key(self) -> tuple[object, ...]:
+        """Everything the shell around the transcript is rendered from. A render caused by
+        the backend or the clock redraws the shell only when this has changed: a delta or
+        a tick changes the transcript, and each of the six widgets around it would
+        otherwise be updated -- and laid out again -- for nothing. What a person does is
+        always drawn in full."""
+        model = self.model
+        latest = model.turns[-1] if model.turns else None
+        return (
+            model.booting,
+            model.connected,
+            model.submitting,
+            model.profile,
+            model.run_status,
+            model.view,
+            model.workspace_path,
+            model.folders,
+            model.mode,
+            model.policy,
+            model.usage,
+            model.interaction,
+            model.composer_draft,
+            model.active_run_id,
+            model.working,
+            model.developer,
+            model.modes,
+            model.policies,
+            model.skills,
+            model.viewport_width,
+            latest.plan if latest is not None else None,
+            latest.plan_explanation if latest is not None else None,
+        )
+
+    def _render_model(self, *, chrome: bool = True) -> None:
         width = max(1, self.model.viewport_width)
-        self.query_one("#app-header", Static).update(render_header(self.model, width=width))
         host = self.query_one("#view-host", ContentSwitcher)
         host.current = self.model.view.value
         self.query_one(f"#{self.model.view.value}", StateView).update_state(self.model)
-
-        self._render_menu()
+        # The notice reads the clock, so it is drawn every time; it is one line.
         notice = self.query_one("#notice", Static)
         shown = render_notice(self.model)
         notice.set_class(shown is not None, "visible")
         notice.update(shown or "")
+        key = self._chrome_key()
+        if not chrome and key == self._chrome_shown:
+            return
+        self._chrome_shown = key
+        self.query_one("#app-header", Static).update(render_header(self.model, width=width))
 
+        self._render_menu()
         plan = self.query_one("#plan", Static)
         pinned = render_plan(self.model, width=max(1, width - 2))
         plan.set_class(pinned is not None, "visible")
@@ -559,7 +616,17 @@ class OrcaApp(App[None]):
             # model -- a keystroke whose notice is still queued -- is left alone.
             self._reported_draft = self.model.composer_draft
             composer.replace_text(self.model.composer_draft)
-        composer.disabled = self.model.booting or self.model.submitting
+        busy = self.model.booting or self.model.submitting
+        if composer.disabled and not busy and self.screen is composer.screen:
+            # A widget loses focus when it is disabled and does not get it back when it
+            # is not: after every send, the next keystroke went nowhere until the input
+            # was focused again by hand. Give it back here, unless the person has put the
+            # focus somewhere else meanwhile.
+            composer.disabled = False
+            if self.focused is None:
+                composer.focus()
+        else:
+            composer.disabled = busy
         composer.placeholder = (
             "Answer the agent…"
             if self.model.interaction is not None and self.model.interaction.kind == "question"
@@ -602,7 +669,11 @@ class OrcaApp(App[None]):
                 )
             case OpenHelp():
                 self.push_screen(
-                    HelpScreen(developer=self.model.developer, choices=self._choices())
+                    HelpScreen(
+                        developer=self.model.developer,
+                        choices=self._choices(),
+                        skills=self.model.skills,
+                    )
                 )
             case OpenThreads():
                 self.run_worker(
@@ -664,10 +735,13 @@ class OrcaApp(App[None]):
                 workspace_path=info.workspace_path,
                 modes=info.modes,
                 policies=info.policies,
+                skills=info.skills,
             )
         )
         if self.model.thread_id and not self.model.turns:
             self.apply_model_action(ThreadSelected(self.model.thread_id))
+        elif self._resume_on_start:
+            self.apply_model_action(CommandInvoked("threads"))
         self.query_one(Composer).focus()
 
     async def _start_run(self, effect: StartRun) -> None:
@@ -728,6 +802,7 @@ class OrcaApp(App[None]):
                 workspace_path=info.workspace_path,
                 modes=info.modes,
                 policies=info.policies,
+                skills=info.skills,
                 reset_conversation=True,
             )
         )

@@ -628,6 +628,52 @@ def test_a_rows_kind_is_read_from_the_backend_and_survives_an_upsert() -> None:
     assert state.turns[-1].progress[0].kind == "read"
 
 
+def test_an_activity_row_keeps_the_tool_and_what_it_was_pointed_at() -> None:
+    from orca.app.actions import EventReceived
+    from orca.app.model import TurnState
+
+    def progress(sequence: int, payload: JsonObject) -> EventReceived:
+        return EventReceived(TaskEvent(sequence, f"e{sequence}", "run.progress", "user", payload))
+
+    state = replace(AppState(), turns=(TurnState("run-1"),), active_run_id="run-1")
+    state = reduce(
+        state,
+        progress(
+            1,
+            {
+                "update_id": "r",
+                "text": "read src/app.py",
+                "status": "active",
+                "tool": "read_file",
+                "arguments": {"path": "src/app.py"},
+            },
+        ),
+    ).state
+    assert state.turns[-1].progress[0].tool == "read_file"
+    assert state.turns[-1].progress[0].detail == "src/app.py"
+
+    # A later event for the row without arguments keeps what the first one said.
+    state = reduce(
+        state, progress(2, {"update_id": "r", "text": "read src/app.py", "status": "completed"})
+    ).state
+    assert state.turns[-1].progress[0].detail == "src/app.py"
+
+    # A command is its own detail; a multi-line one is its first line.
+    state = reduce(
+        state,
+        progress(
+            3,
+            {
+                "update_id": "x",
+                "text": "run: ls",
+                "tool": "run",
+                "arguments": {"command": "ls -la\necho done", "background": False},
+            },
+        ),
+    ).state
+    assert state.turns[-1].progress[1].detail == "ls -la"
+
+
 def test_a_named_command_suggests_the_values_the_backend_offers() -> None:
     from orca.app.commands import suggest
 
@@ -655,6 +701,23 @@ def test_a_named_command_suggests_the_values_the_backend_offers() -> None:
     # The summary beside a value is what the backend said it means, or the command it runs.
     assert suggest("/permissions a", choices=choices)[0].summary.startswith("Ask before")
     assert suggest("/permissions e", choices=choices)[0].summary == "/permissions edits"
+
+
+def test_a_workspace_skill_is_offered_like_a_command_and_left_for_a_request() -> None:
+    from orca.app.commands import suggest
+
+    skills = (Choice("deploy", "Ship a release."), Choice("triage", "Sort the inbox."))
+
+    rows = suggest("/", skills=skills)
+    assert [row.name for row in rows][-2:] == ["deploy", "triage"]
+    deploy = suggest("/dep", skills=skills)[0]
+    assert deploy.label == "/deploy"
+    assert deploy.summary == "Ship a release."
+    assert deploy.insert == "/deploy "
+    assert not deploy.runnable
+    # A skill named like a command does not shadow the command.
+    assert [row.name for row in suggest("/rev", skills=(Choice("review"),))] == ["review"]
+    assert suggest("/rev", skills=(Choice("review"),))[0].runnable
 
 
 def test_a_setting_outside_what_the_backend_offers_is_refused() -> None:
@@ -689,3 +752,114 @@ def test_a_slash_suggests_commands_until_an_argument_or_a_message_begins() -> No
     assert suggest("review") == ()
     assert suggest("/insp") == ()
     assert [c.name for c in suggest("/insp", developer=True)] == ["inspect"]
+
+
+def test_a_delegated_agent_is_its_own_thing_not_rows_in_the_parents_timeline() -> None:
+    """The backend used to send a child's calls as rows with its id in the text and its
+    words as the parent's answer. Now the child's rows carry `agent_id`, its words arrive
+    as `agent.said`, and its life is bounded by `agent.started` and `agent.finished`."""
+    state = reduce(AppState(), RunAccepted("run-1", "thread-1", started_at=100.0)).state
+    state = feed(
+        state,
+        event(
+            1, "run.created", {"message": "look around", "mode": "normal", "approval_policy": "ask"}
+        ),
+        event(
+            2,
+            "run.progress",
+            {
+                "update_id": "d1",
+                "text": "delegate",
+                "status": "completed",
+                "tool": "delegate",
+                "arguments": {"task": "what is here?"},
+            },
+        ),
+        event(3, "agent.started", {"agent_id": "agent_1", "task": "what is here?"}),
+        event(
+            4,
+            "run.progress",
+            {
+                "update_id": "c1",
+                "text": "list .",
+                "status": "active",
+                "tool": "list_dir",
+                "agent_id": "agent_1",
+                "arguments": {"path": "."},
+            },
+        ),
+        event(
+            5,
+            "run.progress",
+            {
+                "update_id": "c1",
+                "text": "list .",
+                "status": "completed",
+                "tool": "list_dir",
+                "agent_id": "agent_1",
+            },
+        ),
+        event(6, "agent.said", {"agent_id": "agent_1", "text": "notes.md, nothing else"}),
+        event(
+            7,
+            "answer.delta",
+            {"effect_id": "a", "model_call_id": "a", "text": "the child says notes.md"},
+        ),
+    )
+    turn = state.turns[-1]
+
+    (agent,) = turn.agents
+    assert agent.task == "what is here?" and agent.running and agent.started_at == 100.0
+    assert [row.update_id for row in agent.progress] == ["c1"]
+    assert agent.progress[0].status == "completed" and agent.progress[0].tool == "list_dir"
+    assert agent.said == ("notes.md, nothing else",)
+    # The parent's own rows and words are untouched by the child's.
+    assert [row.update_id for row in turn.progress] == ["d1"]
+    assert turn.provisional_answer == "the child says notes.md"
+    assert [note.text for note in turn.notes] == ["agent_1 started: what is here?"]
+
+    state = feed(
+        state,
+        event(
+            8,
+            "agent.finished",
+            {
+                "agent_id": "agent_1",
+                "turns": 2,
+                "stop": "done",
+                "answer": "notes.md, nothing else",
+                "seconds": 3.5,
+            },
+        ),
+    )
+    (agent,) = state.turns[-1].agents
+    assert agent.status == "finished" and agent.turns == 2 and agent.seconds == 3.5
+    assert not agent.running
+    assert (
+        state.turns[-1].notes[-1].text == "agent_1 finished after 2 turns: notes.md, nothing else"
+    )
+    assert state.turns[-1].notes[-1].kind == "agent"
+
+
+def test_an_agents_row_before_its_start_event_is_kept() -> None:
+    """A client that joins mid-run may see a row before the start. Neither is dropped."""
+    state = reduce(AppState(), RunAccepted("run-1", "thread-1")).state
+    state = feed(
+        state,
+        event(1, "run.created", {"message": "go", "mode": "normal", "approval_policy": "ask"}),
+        event(
+            2,
+            "run.progress",
+            {
+                "update_id": "c1",
+                "text": "read",
+                "status": "active",
+                "tool": "read_file",
+                "agent_id": "agent_9",
+            },
+        ),
+        event(3, "agent.failed", {"agent_id": "agent_9", "error": "RuntimeError: boom"}),
+    )
+    (agent,) = state.turns[-1].agents
+    assert agent.status == "failed" and [r.update_id for r in agent.progress] == ["c1"]
+    assert state.turns[-1].notes[-1].text == "agent_9 failed: RuntimeError: boom"

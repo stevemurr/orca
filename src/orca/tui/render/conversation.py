@@ -12,6 +12,7 @@ from rich.text import Text
 
 from orca.app.model import (
     Activity,
+    AgentState,
     AppState,
     Narration,
     ProgressItem,
@@ -20,10 +21,10 @@ from orca.app.model import (
     TurnNote,
     TurnState,
 )
-from orca.tui.render.chrome import render_interaction
+from orca.tui.render.chrome import render_interaction, settings_label
 from orca.tui.render.code import code_block
 from orca.tui.render.markdown import answer_markdown
-from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNING
+from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, TEXT, WARNING
 
 
 def render_conversation(state: AppState, *, width: int) -> RenderableType:
@@ -54,34 +55,124 @@ def turn_key(state: AppState, turn: TurnState, *, width: int) -> tuple[object, .
 
 def render_turn(state: AppState, turn: TurnState, *, width: int) -> RenderableType:
     """One turn: the request, then what happened, in order."""
-    rows: list[RenderableType] = []
-    rows.append(_request_block(turn.request or "Submitting…"))
+    head, stream, tail = _turn_rows(state, turn, width=width)
+    return Group(*head, *stream, *tail)
+
+
+#: One piece of a live turn: what its rendering depends on, or None for a piece that is
+#: rendered every time, and the rendering.
+Piece = tuple[tuple[object, ...] | None, RenderableType]
+
+
+def render_live_turn(state: AppState, turn: TurnState, *, width: int) -> tuple[Piece, ...]:
+    """The turn a run is going in, in pieces a host can keep or redraw one at a time.
+
+    The head is everything settled: it changes when the stream adds a segment. The
+    stream is the paragraph being written, when the turn ends in one: it changes on every
+    delta, and it is the only thing that does. The tail is the group of tool calls the
+    turn ends with -- the one whose last row shines -- with the spinner and the approval
+    prompt under it, and it moves with the clock. Measured 2026-09-03: a tick re-rendered
+    a live turn holding two code blocks, 40 ms through pygments, for a spinner frame; a
+    delta did the same for a word.
+    """
+    head, stream, tail = _turn_rows(state, turn, width=width)
+    pieces: list[Piece] = [(_head_key(state, turn, width=width), Group(*head))]
+    if stream:
+        pieces.append(((_timeline(turn)[_stream_start(turn) :], width), Group(*stream)))
+    pieces.append((None, Group(*tail)))
+    return tuple(pieces)
+
+
+def _tail_start(turn: TurnState) -> int:
+    """Where the tail begins: the first of the tool calls the turn ends with, or the end."""
+    timeline = _timeline(turn)
+    split = len(timeline)
+    while split and isinstance(timeline[split - 1], Activity):
+        split -= 1
+    return split
+
+
+def _stream_start(turn: TurnState) -> int:
+    """Where the paragraph being written begins: just before the tail, when what is
+    there is the model's words and nothing follows them."""
+    split = _tail_start(turn)
+    timeline = _timeline(turn)
+    if split == len(timeline) and split and isinstance(timeline[split - 1], Narration):
+        return split - 1
+    return split
+
+
+def _head_key(state: AppState, turn: TurnState, *, width: int) -> tuple[object, ...]:
+    timeline = _timeline(turn)
+    head = timeline[: _stream_start(turn)]
+    shown = {segment.update_id for segment in head if isinstance(segment, Activity)}
+    return (
+        turn.request,
+        head,
+        tuple(item for item in turn.progress if item.update_id in shown),
+        turn.plan,
+        turn.plan_explanation,
+        _pinned(state, turn),
+        state.tools_expanded,
+        state.working,
+        width,
+    )
+
+
+def _turn_rows(
+    state: AppState, turn: TurnState, *, width: int
+) -> tuple[list[RenderableType], list[RenderableType], list[RenderableType]]:
+    """The turn's rows in three lists: the head, the paragraph being written, and the
+    tail that moves while a run goes. Empty lists for the pieces a turn does not have."""
+    head: list[RenderableType] = []
+    stream: list[RenderableType] = []
+    tail: list[RenderableType] = []
+    rows = head
+    head.append(_request_block(turn.request or "Submitting…"))
     if turn.plan and not _pinned(state, turn):
         # Intent frames activity; the active step is the checklist's only prominent line.
         # The active turn's plan is pinned above the composer instead, by `render_plan`.
-        rows.append(Padding(_plan_checklist(turn), (0, 1)))
+        head.append(Padding(_plan_checklist(turn), (0, 1)))
     by_id = {item.update_id: item for item in turn.progress}
     pending: list[ProgressItem] = []
-    for segment in (*_timeline(turn), None):
+    timeline = _timeline(turn)
+    stream_start, tail_start = _stream_start(turn), _tail_start(turn)
+    # Whether the last row was words -- the model's or the person's. Two blocks of words
+    # in a row get a blank line between them; tool rows bring their own, either side.
+    after_words = False
+    for index, segment in enumerate((*timeline, None)):
+        if index == stream_start:
+            rows = stream
+        if index == tail_start:
+            rows = tail
         if isinstance(segment, Activity):
             if (item := by_id.get(segment.update_id)) is not None:
                 pending.append(item)
             continue
         if pending:
             # Consecutive rows share one table so their glyphs line up.
-            # A blank line either side: rows sit between paragraphs of the model's
-            # own words, and against them they read as part of the sentence.
             # The group at the end of a working turn is what the agent is on now,
             # between one call and the next: it shines like a running call does.
-            tail = segment is None and turn.run_id == state.active_run_id and state.working
-            rows.append(Padding(_activity_table(pending, state, live=tail), (1, 1)))
+            live = segment is None and turn.run_id == state.active_run_id and state.working
+            rows.append(Padding(_activity_card(pending, state, live=live), (1, 0)))
             pending = []
+            after_words = False
+        if segment is None:
+            if turn.run_id == state.active_run_id and any(a.running for a in turn.agents):
+                # What the parent is waiting on, or working beside: each delegated agent
+                # still going, with where it is. Below the activity, where it is a thing of
+                # the moment, and gone once every agent has reported.
+                rows.append(Padding(_agents_strip(turn, state), (0, 1)))
+            continue
+        if after_words:
+            rows.append(Text(""))
         if isinstance(segment, Narration):
             rows.append(Padding(answer_markdown(segment.text), (0, 1)))
-        elif isinstance(segment, TurnNote):
+        else:
             # The steer's bar stands where the request's does, flush; the two are a pair.
             row = _note_row(segment)
             rows.append(row if segment.kind == "steer" else Padding(row, (0, 1)))
+        after_words = True
     asked = state.interaction
     if (
         asked is not None
@@ -91,18 +182,18 @@ def render_turn(state: AppState, turn: TurnState, *, width: int) -> RenderableTy
     ):
         # The prompt at the end of the turn it belongs to, where the person is reading,
         # the way an editor's agent asks; its answer takes its place once decided.
-        rows.append(Padding(prompt, (1, 1, 0, 1)))
+        tail.append(Padding(prompt, (1, 1, 0, 1)))
     if turn.run_id == state.active_run_id and state.working:
-        rows.append(Padding(_working(state), (1, 1, 0, 1)))
+        tail.append(Padding(_working(state), (1, 1, 0, 1)))
     for artifact in turn.artifacts:
         label = artifact.reference or artifact.artifact_id
-        rows.append(
+        tail.append(
             Padding(
                 Text.assemble(("◇ ", ACCENT), (artifact.title, "bold"), (f"  {label}", MUTED)),
                 (0, 1),
             )
         )
-    return Group(*rows)
+    return head, stream, tail
 
 
 def render_plan(state: AppState, *, width: int) -> RenderableType | None:
@@ -213,33 +304,76 @@ def _timeline(turn: TurnState) -> tuple[Segment, ...]:
     return (*rows, *turn.notes, *((Narration(answer),) if answer else ()))
 
 
+def _activity_card(
+    items: list[ProgressItem], state: AppState, *, live: bool = False
+) -> RenderableType:
+    """A run of tool calls in a card: a rounded border in the callout grey, flush with
+    the bars that mark the person's words, so what the agent did on the machine reads as
+    one distinct thing between its paragraphs -- distinct, not loud."""
+    return Panel(
+        _activity_table(items, state, live=live),
+        box=box.ROUNDED,
+        border_style=CALLOUT,
+        padding=(0, 1),
+    )
+
+
+def _row_words(item: ProgressItem) -> tuple[str, str]:
+    """The row as prose and its argument: `ReadFile`, `src/app.py`.
+
+    The tool's name in words, from the name the backend gave -- `read_file` is
+    `ReadFile`, `web_search` is `WebSearch`, a tool server's `files__list` is
+    `FilesList` -- and beside it the one argument that says what it was pointed at.
+    A row whose backend named no tool shows the backend's own summary.
+    """
+    if not item.tool:
+        return item.text, ""
+    words = "".join(part.capitalize() for part in item.tool.replace("-", "_").split("_") if part)
+    return words, item.detail
+
+
 def _activity_table(
     items: list[ProgressItem], state: AppState, *, live: bool = False
 ) -> RenderableType:
     """A run of tool calls. Folded, it is the latest call and a count -- the one a person
-    is watching, and how much came before it; `/tools` or Ctrl+T shows them all. `live`
+    is watching, and how much came before it; `/tools` or Ctrl+T shows them all. A call
+    that wrote code stays in the fold, code and all: a person reads a write after the
+    next call has begun, and the fold used to take it away the moment one did. `live`
     says the group is the working turn's latest, so its last row shines even between
     calls."""
     activity = Table.grid(padding=(0, 1))
     activity.add_column(width=2, no_wrap=True)
     activity.add_column(ratio=1, overflow="fold")
-    shown = items if state.tools_expanded or len(items) == 1 else items[-1:]
+    if state.tools_expanded or len(items) == 1:
+        shown = items
+    else:
+        shown = [item for item in items[:-1] if item.snippets] + [items[-1]]
     folded = len(items) - len(shown)
     for item in shown:
         glyph, style, text_style = _activity_look(item)
-        count = f"  ·  {folded + 1} tool calls ›" if folded else ""
+        words, detail = _row_words(item)
+        # The count sits on the latest call, below whatever code the fold kept.
+        count = f"  ·  {len(items)} tool calls ›" if folded and item is shown[-1] else ""
         running = item.status.lower() == "active" and state.working
         if running or (live and item is shown[-1] and item.status.lower() != "failed"):
             # The whole line shines, count included: folded, the count is part of what a
             # person is watching.
-            line = shimmer(item.text + count, state.clock)
+            line = shimmer(" ".join(part for part in (words, detail) if part) + count, state.clock)
         else:
-            line = Text(item.text, style=text_style)
+            # The prose in the text colour and the argument in grey, so the name of the
+            # act and what it was done to read as two things; a failure is red through.
+            line = Text(words, style=text_style if text_style == ERROR else TEXT)
+            if detail:
+                line.append(f" {detail}", style=text_style)
             line.append(count, style=MUTED)
         activity.add_row(Text(glyph, style=style), line)
         for snippet in item.snippets:
             # The code under its row, the way an editor's transcript shows a write.
             activity.add_row(Text(""), code_block(snippet, lines=_TRANSCRIPT_LINES))
+        if item.snippets and item is not shown[-1]:
+            # Air between the code and the next call, so the row after it is not read
+            # as the block's last line.
+            activity.add_row(Text(""), Text(""))
     return activity
 
 
@@ -282,6 +416,7 @@ _KIND_GLYPHS = {
     "fetch": "◎",
     "think": "✦",
     "switch_mode": "⇄",
+    "skill": "◈",
 }
 
 
@@ -311,7 +446,7 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
     for folder in state.folders:
         details.add_row("folder", folder)
     details.add_row("connection", state.endpoint or "resolving…")
-    details.add_row("session", f"{state.mode} · {state.policy}")
+    details.add_row("session", settings_label(state.mode, state.policy))
     how = Text(style=MUTED)
     how.append("Type a message to start. ")
     how.append("/", style=ACCENT)
@@ -361,9 +496,84 @@ class _Barred:
             yield Cell.line()
 
 
+_AGENT_GLYPHS = {"running": ("◐", ACCENT), "finished": ("●", MUTED), "failed": ("✗", WARNING)}
+
+
+def _agents_strip(turn: TurnState, state: AppState) -> RenderableType:
+    """One line per delegated agent still running: its id, its task, how long, and the
+    last thing it did or said."""
+    table = Table.grid(padding=(0, 1))
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True, style=f"bold {MUTED}")
+    table.add_column(ratio=1)
+    table.add_column(no_wrap=True, style=MUTED, justify="right")
+    for agent in turn.agents:
+        if not agent.running:
+            continue
+        glyph, style = _AGENT_GLYPHS["running"]
+        elapsed = state.clock - agent.started_at if agent.started_at else 0.0
+        table.add_row(
+            Text(glyph, style=style),
+            agent.agent_id,
+            Text.assemble(
+                (_first_line(agent.task, 60), ""), ("  ", ""), (_agent_latest(agent), MUTED)
+            ),
+            f"{elapsed:.0f}s" if elapsed else "",
+        )
+    return table
+
+
+def _agent_latest(agent: AgentState) -> str:
+    """What the agent is on now: its latest row, else the last thing it said."""
+    if agent.progress:
+        row = agent.progress[-1]
+        words, detail = _row_words(row)
+        return f"{words} {detail}".strip()
+    if agent.said:
+        return _first_line(agent.said[-1], 80)
+    return "starting"
+
+
+def _first_line(text: str, limit: int) -> str:
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    return first if len(first) <= limit else first[: limit - 1] + "…"
+
+
+def render_agents(state: AppState, *, width: int) -> RenderableType:
+    """Every delegated agent of the conversation, newest turn first: its life in one
+    line, then its rows and its words. Where to look when the parent is waiting on one."""
+    del width
+    pieces: list[RenderableType] = []
+    for turn in reversed(state.turns):
+        for agent in reversed(turn.agents):
+            glyph, style = _AGENT_GLYPHS.get(agent.status, ("■", MUTED))
+            head = Text.assemble(
+                (f"{glyph} ", style),
+                (agent.agent_id, "bold"),
+                ("  ", ""),
+                (agent.status, MUTED),
+                (f"  {agent.turns} turns" if agent.turns else "", MUTED),
+                (f"  {agent.seconds:.0f}s" if agent.seconds else "", MUTED),
+            )
+            pieces.append(head)
+            if agent.task:
+                pieces.append(Padding(Text(agent.task.strip(), style=MUTED), (0, 2)))
+            if agent.progress:
+                pieces.append(Padding(_activity_card(list(agent.progress), state), (0, 2)))
+            for said in agent.said:
+                pieces.append(Padding(answer_markdown(said), (0, 2)))
+            if agent.answer:
+                pieces.append(Padding(Text("answer", style=f"bold {MUTED}"), (0, 2)))
+                pieces.append(Padding(answer_markdown(agent.answer), (0, 2)))
+            pieces.append(Text(""))
+    if not pieces:
+        return Text("No delegated agents in this conversation.", style=MUTED)
+    return Group(*pieces)
+
+
 def _note_row(note: TurnNote) -> RenderableType:
     if note.kind == "steer":
         return _Barred(answer_markdown(note.text))
-    glyph = {"compaction": "⇥", "folder": "+", "ended": "■"}[note.kind]
+    glyph = {"compaction": "⇥", "folder": "+", "ended": "■", "agent": "⑂"}[note.kind]
     style = WARNING if note.kind == "ended" else ACCENT
     return Text.assemble((f"{glyph} ", style), (note.text, f"italic {MUTED}"))

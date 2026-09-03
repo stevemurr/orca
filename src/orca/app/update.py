@@ -32,6 +32,7 @@ from orca.app.actions import (
 from orca.app.commands import parse_input
 from orca.app.model import (
     Activity,
+    AgentState,
     AppState,
     ArtifactOffer,
     Choice,
@@ -168,6 +169,7 @@ def reduce(state: AppState, action: Action) -> Transition:
                 workspace_path=action.workspace_path,
                 modes=action.modes,
                 policies=action.policies,
+                skills=action.skills,
                 **conversation,
             )
         )
@@ -376,6 +378,7 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
         "chat": ViewId.CONVERSATION,
         "review": ViewId.REVIEW,
         "inspect": ViewId.INSPECTOR,
+        "agents": ViewId.AGENTS,
     }
     if route := routes.get(name):
         return reduce(state, Navigate(route))
@@ -508,7 +511,10 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         if not update_id or not text:
             return Transition(state)
         turn = _latest_turn(state)
-        held = next((entry for entry in turn.progress if entry.update_id == update_id), None)
+        agent_id = _string(payload, "agent_id")
+        agent = _agent(turn, agent_id) if agent_id else None
+        rows = agent.progress if agent is not None else turn.progress
+        held = next((entry for entry in rows if entry.update_id == update_id), None)
         arguments = payload.get("arguments")
         item = ProgressItem(
             update_id=update_id,
@@ -519,7 +525,22 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             if isinstance(arguments, Mapping)
             else (held.snippets if held is not None else ()),
             kind=_string(payload, "kind") or (held.kind if held is not None else ""),
+            tool=_string(payload, "tool") or (held.tool if held is not None else ""),
+            detail=_detail(arguments)
+            if isinstance(arguments, Mapping)
+            else (held.detail if held is not None else ""),
+            agent_id=agent_id,
         )
+        if agent is not None:
+            # A delegated agent's row belongs to it, not to the turn's timeline: the
+            # timeline is the parent's story, and the agent is drawn as its own.
+            rows = _upsert_by(agent.progress, item, lambda entry: entry.update_id)
+            return Transition(
+                _replace_latest_turn(
+                    state,
+                    replace(_with_agent(turn, replace(agent, progress=rows)), status="running"),
+                )
+            )
         progress = _upsert_by(turn.progress, item, lambda entry: entry.update_id)
         timeline = turn.timeline
         if all(entry.update_id != update_id for entry in turn.progress):
@@ -652,6 +673,57 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             replace(state, usage=Usage(tokens, window, payload.get("estimated") is True))
         )
 
+    if kind == "agent.started":
+        agent_id = _string(payload, "agent_id")
+        if not agent_id:
+            return Transition(state)
+        turn = _latest_turn(state)
+        agent = replace(
+            _agent(turn, agent_id),
+            task=_string(payload, "task"),
+            status="running",
+            started_at=state.clock,
+        )
+        state = _replace_latest_turn(state, _with_agent(turn, agent))
+        return Transition(_note(state, "agent", f"{agent_id} started: {_one_line(agent.task)}"))
+
+    if kind == "agent.said":
+        agent_id = _string(payload, "agent_id")
+        text = _string(payload, "text").strip()
+        if not agent_id or not text:
+            return Transition(state)
+        turn = _latest_turn(state)
+        agent = _agent(turn, agent_id)
+        agent = replace(agent, said=(*agent.said, text))
+        return Transition(_replace_latest_turn(state, _with_agent(turn, agent)))
+
+    if kind in {"agent.finished", "agent.failed", "agent.stopped"}:
+        agent_id = _string(payload, "agent_id")
+        if not agent_id:
+            return Transition(state)
+        turn = _latest_turn(state)
+        agent = _agent(turn, agent_id)
+        status = {"agent.finished": "finished", "agent.failed": "failed"}.get(kind, "stopped")
+        seconds = payload.get("seconds")
+        turns = payload.get("turns")
+        agent = replace(
+            agent,
+            status=status,
+            answer=_string(payload, "answer") or agent.answer,
+            seconds=float(seconds) if isinstance(seconds, int | float) else agent.seconds,
+            turns=int(turns) if isinstance(turns, int) else agent.turns,
+        )
+        state = _replace_latest_turn(state, _with_agent(turn, agent))
+        if kind == "agent.finished":
+            said = f"{agent_id} finished after {agent.turns} turns"
+            if agent.answer:
+                said += f": {_one_line(agent.answer)}"
+        elif kind == "agent.failed":
+            said = f"{agent_id} failed: {_string(payload, 'error') or 'no reason given'}"
+        else:
+            said = f"{agent_id} stopped"
+        return Transition(_note(state, "agent", said))
+
     if kind == "context.compacted":
         # A `user` row on purpose: the agent now works from a summary, which is the honest
         # explanation for any change in how it behaves next.
@@ -762,6 +834,18 @@ def _reported_run_status(value: str) -> RunStatus | None:
         return None
 
 
+def _agent(turn: TurnState, agent_id: str) -> AgentState:
+    """The turn's agent by id, or a new one: a row or a word may arrive before the start
+    event when a client joins mid-run, and neither should be dropped for it."""
+    return next(
+        (agent for agent in turn.agents if agent.agent_id == agent_id), AgentState(agent_id)
+    )
+
+
+def _with_agent(turn: TurnState, agent: AgentState) -> TurnState:
+    return replace(turn, agents=_upsert_by(turn.agents, agent, lambda entry: entry.agent_id))
+
+
 def _note(state: AppState, kind: TurnNoteKind, text: str) -> AppState:
     """Attach a note to the latest turn, or leave the state alone when there is nothing to say."""
     if not text:
@@ -775,6 +859,28 @@ def _note(state: AppState, kind: TurnNoteKind, text: str) -> AppState:
 
 def _without_narration(timeline: tuple[Segment, ...]) -> tuple[Segment, ...]:
     return tuple(item for item in timeline if not isinstance(item, Narration))
+
+
+#: The argument that says what a call was pointed at, by the names tools give it, most
+#: telling first. A tool with none of these shows its first string argument.
+_DETAIL_KEYS = ("path", "command", "query", "pattern", "url", "agent_id", "task", "name")
+
+
+def _detail(arguments: JsonObject) -> str:
+    """One line naming what the call was about: `src/app.py`, `uv run pytest -q`."""
+    for key in _DETAIL_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return _one_line(value)
+    for value in arguments.values():
+        if isinstance(value, str) and value.strip():
+            return _one_line(value)
+    return ""
+
+
+def _one_line(value: str, limit: int = 120) -> str:
+    first = value.strip().splitlines()[0]
+    return first if len(first) <= limit else first[: limit - 1] + "…"
 
 
 def _snippets(arguments: JsonObject) -> tuple[Snippet, ...]:

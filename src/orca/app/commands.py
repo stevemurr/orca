@@ -58,6 +58,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("add", "reach one more folder from this conversation", "<path>"),
     CommandSpec("status", "show connection and run status"),
     CommandSpec("tools", "show every tool call, or fold them again"),
+    CommandSpec("agents", "show the delegated agents and their work"),
     CommandSpec("help", "show commands and keyboard shortcuts"),
     CommandSpec("inspect", "open developer events and traces", developer_only=True),
     CommandSpec("quit", "leave; durable work keeps running"),
@@ -91,14 +92,20 @@ def argument_label(command: CommandSpec, values: Sequence[Choice]) -> str:
 
 
 def suggest(
-    draft: str, *, developer: bool = False, choices: Choices | None = None
+    draft: str,
+    *,
+    developer: bool = False,
+    choices: Choices | None = None,
+    skills: Sequence[Choice] = (),
 ) -> tuple[Suggestion, ...]:
     """The rows a draft could become, for a menu that opens on `/`.
 
-    While the draft is a slash and the start of a name, the commands that start that way.
-    Once a name and a space follow, the values the backend accepts for that command, if it
-    said -- so `/permissions ` shows what a policy can be rather than leaving a person to
-    guess. Nothing once a message or a second word begins: a menu over either is in the way.
+    While the draft is a slash and the start of a name, the commands that start that way,
+    then the workspace's skills that do: a skill is invoked as `/name`, like a command, and
+    the backend reads its instructions as the request. Once a name and a space follow, the
+    values the backend accepts for that command, if it said -- so `/permissions ` shows
+    what a policy can be rather than leaving a person to guess. Nothing once a message or
+    a second word begins: a menu over either is in the way.
     """
     if not draft.startswith("/") or "\n" in draft:
         return ()
@@ -106,10 +113,15 @@ def suggest(
     head, named, rest = draft[1:].partition(" ")
     head = head.lower()
     if not named:
-        return tuple(
+        commands = tuple(
             _command_row(command, offered.get(command.name, ()))
             for command in visible_commands(developer=developer)
             if command.name.startswith(head)
+        )
+        return commands + tuple(
+            _skill_row(skill)
+            for skill in skills
+            if skill.name.startswith(head) and skill.name not in _COMMANDS_BY_NAME
         )
     command = _COMMANDS_BY_NAME.get(head)
     values = offered.get(head, ())
@@ -127,6 +139,19 @@ def suggest(
         )
         for value in values
         if value.name.lower().startswith(rest.lower())
+    )
+
+
+def _skill_row(skill: Choice) -> Suggestion:
+    """A skill as a menu row. Enter puts `/name ` in the composer rather than sending it,
+    so what to apply the skill to can follow; a second Enter sends it as it stands."""
+    return Suggestion(
+        name=skill.name,
+        label=f"/{skill.name}",
+        argument="[request]",
+        summary=skill.summary or "a skill of this workspace",
+        insert=f"/{skill.name} ",
+        runnable=False,
     )
 
 

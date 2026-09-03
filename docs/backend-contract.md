@@ -92,10 +92,15 @@ it is the only side that can see where the person was standing — and asks the 
 
 ### `GET /workspaces`
 
-`[{"workspace_id", "name", "root_path", "vcs", "repo_identity"}, …]`. `root_path` is matched
-against the resolved local folder **exactly**; a registered ancestor is deliberately ignored,
-because showing the launch directory while submitting a run against a broader folder elsewhere is
-the most dangerous lie a client can tell.
+`[{"workspace_id", "name", "root_path", "vcs", "repo_identity", "skills"}, …]`. `root_path` is
+matched against the resolved local folder **exactly**; a registered ancestor is deliberately
+ignored, because showing the launch directory while submitting a run against a broader folder
+elsewhere is the most dangerous lie a client can tell.
+
+`skills`, optional, lists the skills the backend found beside the folder, each a name with a
+summary like the modes under `/capabilities`. orca offers them in the `/` menu and in `/help`; a
+message beginning `/name` for one of them is sent as written, and the backend reads the skill's
+instructions as the request. Per folder, so here rather than under `/capabilities`.
 
 ### `POST /workspaces`
 
@@ -261,7 +266,7 @@ which is the one failure this rule exists to prevent.
 | Type | Payload read | What orca does |
 |---|---|---|
 | `run.created` | `message`, `mode`, `approval_policy` | Opens the turn with the person's request. |
-| `run.progress` | `update_id`, `text`, `status`, `arguments`, `tool`, `kind` | One activity row, upserted by `update_id`. `status` is `active`, `completed` or `failed`. `arguments` are the call's own, on every event for the row; a `path` with `content`, or with `old` and `new`, is shown as the code under the row. `kind` picks the row's glyph: `read`, `search`, `edit`, `execute`, `fetch`, `think`, `switch_mode`; anything else gets a plain mark. |
+| `run.progress` | `update_id`, `text`, `status`, `arguments`, `tool`, `kind`, `agent_id` | One activity row, upserted by `update_id`. With `agent_id`, the row is a delegated agent's and is shown under that agent rather than in the turn. `status` is `active`, `completed` or `failed`. `arguments` are the call's own, on every event for the row; a `path` with `content`, or with `old` and `new`, is shown as the code under the row. `kind` picks the row's glyph: `read`, `search`, `edit`, `execute`, `fetch`, `think`, `switch_mode`, `skill`; anything else gets a plain mark. |
 | `answer.delta` | `effect_id`, `model_call_id`, `text` | Streams the answer. The pair identifies one attempt; a delta from a different pair discards what was streamed and starts again. Both are opaque — repeat one value in both if you have a single attempt identity. |
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
@@ -273,6 +278,10 @@ which is the one failure this rule exists to prevent.
 | `run.steered` | `content` | A note on the turn with the instruction the person sent. |
 | `context.usage` | `tokens`, `context_window`, `estimated` | How full the context is after the last model call, in the footer. `estimated` says the backend counted characters rather than being told. Live only; not replayed. |
 | `folder.added` | `path` | A note on the turn, and the folder joins the header. Absolute. |
+| `agent.started` | `agent_id`, `task` | A delegated agent began. A note on the turn, and a row in the agents strip while it runs. |
+| `agent.said` | `agent_id`, `text`, `report` | What a delegated agent said as it went -- its narration, or a report when `report` is true. Kept with the agent, never shown as the parent's answer. |
+| `agent.finished` | `agent_id`, `turns`, `stop`, `answer`, `seconds` | The agent's answer, as a note on the turn and in `/agents`. |
+| `agent.failed` / `agent.stopped` | `agent_id`, `error` | The agent ended without an answer. A note on the turn. |
 | `run.paused` | — | Not terminal. |
 | `run.resumed` | — | Not terminal. Undoes `run.paused`; without it a paused run reads as paused until it ends. |
 | `run.completed` | `summary` | Terminal. Exactly one, nothing after it. `summary` replaces the streamed answer; when it *is* the streamed answer, the turn keeps its shape. |

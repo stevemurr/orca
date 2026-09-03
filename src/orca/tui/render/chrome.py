@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from rich import box
 from rich.console import Group, RenderableType
 from rich.panel import Panel
@@ -9,15 +11,38 @@ from rich.table import Table
 from rich.text import Text
 
 from orca.app.commands import Choices, Suggestion, argument_label, visible_commands
-from orca.app.model import AppState, RunStatus, Usage
+from orca.app.model import AppState, Choice, RunStatus, Usage
 from orca.tui.render.code import code_block
 from orca.tui.render.theme import (
     ACCENT,
+    CALLOUT,
     ERROR,
     MUTED,
+    PLAN,
     SUCCESS,
     WARNING,
 )
+
+#: A colour for each setting a person can name, so a glance at the footer says what
+#: state the next turn starts in. The vocabularies are the backend's and open, so a value
+#: not listed is shown in the muted grey, never dropped. Policies run from cool to hot as
+#: they let more through; `plan` is its own colour because it is a way of working, not a
+#: verdict.
+MODE_COLOURS = {"normal": SUCCESS, "plan": PLAN}
+POLICY_COLOURS = {"ask": ACCENT, "edits": WARNING, "full-access": ERROR}
+
+
+def mode_style(mode: str) -> str:
+    return MODE_COLOURS.get(mode, MUTED)
+
+
+def policy_style(policy: str) -> str:
+    return POLICY_COLOURS.get(policy, MUTED)
+
+
+def settings_label(mode: str, policy: str) -> Text:
+    """`normal · ask`, each in its colour."""
+    return Text.assemble((mode, mode_style(mode)), (" · ", MUTED), (policy, policy_style(policy)))
 
 
 def render_header(state: AppState, *, width: int) -> RenderableType:
@@ -122,14 +147,24 @@ def _numbered(options: tuple[str, ...]) -> RenderableType:
     return rows
 
 
+#: Rows of the `/` menu shown at once. A window of eight rows and a line saying how many
+#: more keeps the highlighted row in view however far down the list it is, rather than
+#: cut off below the strip; the strip is sized to hold exactly that.
+_MENU_ROWS = 8
+
+
 def render_command_menu(rows: tuple[Suggestion, ...], selected: int) -> RenderableType:
-    """The rows a draft could become, one highlighted. Enter runs it, Tab takes it."""
+    """The rows a draft could become, one highlighted. Enter runs it, Tab takes it. A long
+    list is a window that slides with the highlight, so the row a person moved to is
+    always the one they can see."""
+    start = max(0, min(selected - _MENU_ROWS + 1, len(rows) - _MENU_ROWS))
+    shown = rows[start : start + _MENU_ROWS]
     table = Table.grid(padding=(0, 2))
     table.add_column(width=2, no_wrap=True)
     table.add_column(no_wrap=True)
     table.add_column(no_wrap=True, style=MUTED)
     table.add_column(ratio=1, style=MUTED, overflow="ellipsis")
-    for index, row in enumerate(rows):
+    for index, row in enumerate(shown, start=start):
         chosen = index == selected
         table.add_row(
             Text("›" if chosen else "", style=f"bold {ACCENT}"),
@@ -137,6 +172,15 @@ def render_command_menu(rows: tuple[Suggestion, ...], selected: int) -> Renderab
             Text(row.argument),
             Text(row.summary, style="bold" if chosen else MUTED),
         )
+    hidden = len(rows) - len(shown)
+    if hidden:
+        above, below = start, len(rows) - start - len(shown)
+        where = " and ".join(
+            part
+            for part in (f"{above} above" if above else "", f"{below} below" if below else "")
+            if part
+        )
+        table.add_row(Text(""), Text(f"… {where}", style=MUTED), Text(""), Text(""))
     return table
 
 
@@ -158,11 +202,6 @@ def render_notice(state: AppState) -> Text | None:
 
 
 def render_footer(state: AppState) -> Text:
-    left = {
-        "conversation": f"{state.mode} · {state.policy}",
-        "review": "esc back · /chat conversation",
-        "inspector": "developer view · esc back",
-    }[state.view.value]
     if state.view.value == "conversation":
         # The folder the run works in, where an editor's agent shows it: under the input,
         # beside the settings for the next turn. The folders the conversation reaches
@@ -171,19 +210,29 @@ def render_footer(state: AppState) -> Text:
         place = state.workspace_path
         if state.folders:
             place += " + " + ", ".join(_folder_name(folder) for folder in state.folders)
-        groups = [group for group in (place, left) if group]
+        groups: list[Text] = []
+        if place:
+            groups.append(Text(place, style=MUTED))
+        groups.append(settings_label(state.mode, state.policy))
         if state.usage is not None:
-            groups.append(_usage_label(state.usage))
-        left = "   ".join(groups)
+            groups.append(context_meter(state.usage))
+        left_text = Text("   ", style=MUTED).join(groups)
+    else:
+        words = {
+            "review": "esc back · /chat conversation",
+            "inspector": "developer view · esc back",
+            "agents": "delegated agents · esc back",
+        }[state.view.value]
+        left_text = Text(words, style=MUTED)
+    left_text.no_wrap = True
+    left_text.overflow = "ellipsis"
     right = "ctrl+p commands"
     # The footer sits two cells in from either edge, level with the transcript's text.
     width = max(1, state.viewport_width - 4)
     if width < len(right) + 6:
-        text = Text(left, style=MUTED, overflow="ellipsis", no_wrap=True)
-        text.truncate(width, overflow="ellipsis")
-        return text
+        left_text.truncate(width, overflow="ellipsis")
+        return left_text
 
-    left_text = Text(left, style=MUTED, overflow="ellipsis", no_wrap=True)
     left_text.truncate(width - len(right) - 1, overflow="ellipsis")
     gap = max(1, width - left_text.cell_len - len(right))
     text = Text(overflow="crop", no_wrap=True)
@@ -194,7 +243,12 @@ def render_footer(state: AppState) -> Text:
     return text
 
 
-def render_help(*, developer: bool = False, choices: Choices | None = None) -> RenderableType:
+def render_help(
+    *,
+    developer: bool = False,
+    choices: Choices | None = None,
+    skills: Sequence[Choice] = (),
+) -> RenderableType:
     table = Table.grid(padding=(0, 2))
     table.add_column(no_wrap=True, style=f"bold {ACCENT}")
     table.add_column(no_wrap=True, style=MUTED)
@@ -202,15 +256,24 @@ def render_help(*, developer: bool = False, choices: Choices | None = None) -> R
     for command in visible_commands(developer=developer):
         values = (choices or {}).get(command.name, ())
         table.add_row(f"/{command.name}", argument_label(command, values), command.summary)
+    parts: list[RenderableType] = [Text("Commands", style="bold"), table]
+    if skills:
+        listed = Table.grid(padding=(0, 2))
+        listed.add_column(no_wrap=True, style=f"bold {ACCENT}")
+        listed.add_column(ratio=1, style=MUTED)
+        for skill in skills:
+            listed.add_row(f"/{skill.name}", skill.summary)
+        parts += [Text(""), Text("Skills of this workspace", style="bold"), listed]
     keys = Table.grid(padding=(0, 2))
     keys.add_column(no_wrap=True, style=f"bold {ACCENT}")
     keys.add_column(style=MUTED)
     keys.add_row("Enter", "send")
     keys.add_row("Shift+Enter", "new line")
+    keys.add_row("Up / Down", "earlier messages, from the first or last line")
     keys.add_row("Esc", "return from a view; pause from chat")
     keys.add_row("Ctrl+P", "command palette")
     keys.add_row("Ctrl+T", "show every tool call, or fold them again")
-    return Group(Text("Commands", style="bold"), table, Text(""), Text("Keys", style="bold"), keys)
+    return Group(*parts, Text(""), Text("Keys", style="bold"), keys)
 
 
 #: Lines of code shown on an approval before the rest is elided. The card scrolls, so this
@@ -218,11 +281,31 @@ def render_help(*, developer: bool = False, choices: Choices | None = None) -> R
 _APPROVAL_LINES = 120
 
 
-def _usage_label(usage: Usage) -> str:
-    """`12.3k / 262k tokens`, with `≈` when the backend estimated rather than measured."""
-    share = f" ({usage.tokens * 100 // usage.context_window}%)" if usage.context_window else ""
+#: The context meter's width, in cells. Ten, so each cell is a tenth and the eye can
+#: read it without the number -- and the number is there too.
+_METER_CELLS = 10
+
+
+def context_meter(usage: Usage) -> Text:
+    """How full the context is, as a bar and a share: `━━━───────  24% of 262k`.
+
+    The bar is in the accent while there is room, amber past six tenths and red past
+    eight and a half, the way a fuel gauge changes colour rather than the number: the
+    number says how much, the colour says whether to care. `≈` when the backend estimated
+    rather than measured. Without a window to measure against, only the count.
+    """
     mark = "≈" if usage.estimated else ""
-    return f"{mark}{_compact(usage.tokens)} / {_compact(usage.context_window)} tokens{share}"
+    if not usage.context_window:
+        return Text(f"{mark}{_compact(usage.tokens)} tokens", style=MUTED)
+    share = min(1.0, usage.tokens / usage.context_window)
+    filled = round(share * _METER_CELLS)
+    colour = ERROR if share >= 0.85 else WARNING if share >= 0.6 else ACCENT
+    meter = Text()
+    meter.append("━" * filled, style=colour)
+    meter.append("━" * (_METER_CELLS - filled), style=CALLOUT)
+    meter.append(f"  {mark}{int(share * 100)}%", style=colour)
+    meter.append(f" of {_compact(usage.context_window)}", style=MUTED)
+    return meter
 
 
 def _compact(count: int) -> str:

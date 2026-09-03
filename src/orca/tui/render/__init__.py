@@ -9,9 +9,15 @@ from orca.tui.render.chrome import (
     render_interaction,
     render_notice,
 )
-from orca.tui.render.conversation import render_conversation, render_plan, render_review
+from orca.tui.render.conversation import (
+    render_agents,
+    render_conversation,
+    render_plan,
+    render_review,
+)
 
 __all__ = [
+    "render_agents",
     "render_command_menu",
     "render_conversation",
     "render_footer",
