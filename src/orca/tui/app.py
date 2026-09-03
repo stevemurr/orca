@@ -31,6 +31,7 @@ from orca.app.actions import (
     ThreadSelected,
     ViewportChanged,
 )
+from orca.app.commands import CommandSpec, spec_for, suggest
 from orca.app.model import AppState, ViewId
 from orca.app.update import (
     AddFolder,
@@ -48,6 +49,7 @@ from orca.app.update import (
 from orca.backend import BackendError, ResolveApproval, RunRequest, TerminalBackend
 from orca.tui.commands import OrcaCommands
 from orca.tui.render import (
+    render_command_menu,
     render_footer,
     render_header,
     render_interaction,
@@ -113,6 +115,19 @@ class OrcaApp(App[None]):
     }
 
     #plan.visible {
+        display: block;
+    }
+
+    #command-menu {
+        width: 100%;
+        height: auto;
+        max-height: 9;
+        padding: 0 1;
+        border-top: solid $surface-lighten-2;
+        display: none;
+    }
+
+    #command-menu.visible {
         display: block;
     }
 
@@ -228,6 +243,9 @@ class OrcaApp(App[None]):
         #: Whether the shell's widgets exist yet. `App.is_mounted` is a method that takes a
         #: widget, so the old `self.is_mounted` guard was a bound method and always true.
         self._shell_ready: bool = False
+        #: Which row of the `/` menu is highlighted. Widget state, not model state: it is
+        #: about where a cursor is, and it resets whenever the draft changes.
+        self._menu_index: int = 0
 
     @override
     def compose(self) -> ComposeResult:
@@ -239,6 +257,7 @@ class OrcaApp(App[None]):
                 yield InspectorView(id=ViewId.INSPECTOR.value, classes="main-view")
             yield Static(id="plan")
             yield Static(id="interaction")
+            yield Static(id="command-menu")
             with Horizontal(id="composer-frame"):
                 yield Static("›", id="composer-prompt")
                 yield Composer()
@@ -275,20 +294,65 @@ class OrcaApp(App[None]):
         self.model = transition.state
         if self._shell_ready and not isinstance(action, ComposerChanged):
             self._render_model()
+        elif self._shell_ready:
+            # Typing re-renders the menu alone; the rest of the shell has not changed.
+            self._menu_index = 0
+            self._render_menu()
         for effect in transition.effects:
             self._perform(effect)
 
     def invoke_command(self, name: str, argument: str = "") -> None:
-        spec_requires_argument = name in {"mode", "permissions", "workspace", "add"}
-        if spec_requires_argument and not argument:
+        spec = spec_for(name)
+        if spec is not None and spec.argument and not argument:
             composer = self.query_one(Composer)
-            composer.load_text(f"/{name} ")
+            composer.replace_text(f"/{name} ")
             composer.focus()
             return
         self.apply_model_action(CommandInvoked(name, argument))
 
+    def _suggestions(self) -> tuple[CommandSpec, ...]:
+        return suggest(self.model.composer_draft, developer=self.model.developer)
+
+    def _render_menu(self) -> None:
+        menu = self.query_one("#command-menu", Static)
+        commands = self._suggestions()
+        if not commands:
+            menu.set_class(False, "visible")
+            menu.update("")
+            return
+        self._menu_index %= len(commands)
+        menu.set_class(True, "visible")
+        menu.update(render_command_menu(commands, self._menu_index))
+
+    @on(Composer.MenuMoved)
+    def menu_moved(self, message: Composer.MenuMoved) -> None:
+        commands = self._suggestions()
+        if commands:
+            self._menu_index = (self._menu_index + message.delta) % len(commands)
+            self._render_menu()
+
+    @on(Composer.MenuAccepted)
+    def menu_accepted(self) -> None:
+        commands = self._suggestions()
+        if commands:
+            chosen = commands[self._menu_index % len(commands)]
+            self.query_one(Composer).replace_text(
+                f"/{chosen.name}" + (" " if chosen.argument else "")
+            )
+
     @on(Composer.Submitted)
     def composer_submitted(self, message: Composer.Submitted) -> None:
+        commands = self._suggestions()
+        if commands:
+            # Enter on the menu runs the highlighted command. One that takes an argument
+            # is put in the composer instead, by `invoke_command`, for the person to finish.
+            chosen = commands[self._menu_index % len(commands)]
+            # The model first: a render after the command reloads the draft it holds,
+            # and the widget's own change notice arrives later than that.
+            self.apply_model_action(ComposerChanged(""))
+            self.query_one(Composer).replace_text("")
+            self.invoke_command(chosen.name)
+            return
         self.apply_model_action(ComposerSubmitted(message.text))
 
     @on(TextArea.Changed, "#composer")
@@ -318,6 +382,7 @@ class OrcaApp(App[None]):
         host.current = self.model.view.value
         self.query_one(f"#{self.model.view.value}", RenderedView).update_state(self.model)
 
+        self._render_menu()
         plan = self.query_one("#plan", Static)
         pinned = render_plan(self.model, width=max(1, width - 2))
         plan.set_class(pinned is not None, "visible")

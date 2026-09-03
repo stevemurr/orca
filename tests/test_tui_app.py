@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from typing import override
 
-from textual.widgets import ContentSwitcher
+from textual.widgets import ContentSwitcher, Static
 
 from orca.app.actions import EventReceived, RunAccepted
 from orca.app.model import AppState, TaskEvent, ThreadReplay, ViewId
@@ -435,3 +435,41 @@ def test_the_picker_nests_a_delegated_thread_under_its_parent() -> None:
         "child-late",
         "orphan",
     ]
+
+
+async def test_typing_a_slash_opens_a_menu_that_enter_runs_and_tab_completes() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        await pilot.press("/", "r", "e")
+        await pilot.pause()
+
+        menu = app.query_one("#command-menu", Static)
+        assert menu.has_class("visible")
+
+        # Down once: review, resume -> resume. Tab takes it into the composer.
+        await pilot.press("down", "tab")
+        await pilot.pause()
+        assert composer.text == "/resume"
+
+        composer.replace_text("/rev")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.model.view is ViewId.REVIEW
+        assert composer.text == ""
+        assert not menu.has_class("visible")
+
+        # A command that takes an argument is put in the composer to be finished.
+        app.query_one(Composer).focus()
+        await pilot.press("escape")
+        await pilot.pause()
+        composer.replace_text("/mo")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert composer.text == "/mode "

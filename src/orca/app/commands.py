@@ -53,3 +53,20 @@ def parse_input(value: str) -> ParsedCommand | None:
 
 def visible_commands(*, developer: bool = False) -> tuple[CommandSpec, ...]:
     return tuple(command for command in COMMANDS if developer or not command.developer_only)
+
+
+def spec_for(name: str) -> CommandSpec | None:
+    return _COMMANDS_BY_NAME.get(name)
+
+
+def suggest(draft: str, *, developer: bool = False) -> tuple[CommandSpec, ...]:
+    """The commands a draft could become, for a menu that opens on `/`.
+
+    Only while the draft is a single line that is nothing but a slash and the start of a
+    name: once a space or a newline follows, the person is writing an argument or a
+    message, and a menu over it would be in the way.
+    """
+    if not draft.startswith("/") or "\n" in draft or " " in draft:
+        return ()
+    head = draft[1:].lower()
+    return tuple(c for c in visible_commands(developer=developer) if c.name.startswith(head))

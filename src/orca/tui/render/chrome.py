@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from orca.app.commands import visible_commands
+from orca.app.commands import CommandSpec, visible_commands
 from orca.app.model import AppState, RunStatus, Usage
 from orca.tui.render.code import code_block
 from orca.tui.render.theme import (
@@ -99,6 +99,24 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
         padding=(0, 1),
         width=max(1, width),
     )
+
+
+def render_command_menu(commands: tuple[CommandSpec, ...], selected: int) -> RenderableType:
+    """The commands a draft could become, one highlighted. Enter runs it, Tab takes it."""
+    table = Table.grid(padding=(0, 2))
+    table.add_column(width=2, no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True, style=MUTED)
+    table.add_column(ratio=1, style=MUTED, overflow="ellipsis")
+    for index, command in enumerate(commands):
+        chosen = index == selected
+        table.add_row(
+            Text("›" if chosen else "", style=f"bold {ACCENT}"),
+            Text(f"/{command.name}", style=f"bold {ACCENT}" if chosen else ACCENT),
+            Text(command.argument),
+            Text(command.summary, style="bold" if chosen else MUTED),
+        )
+    return table
 
 
 def render_footer(state: AppState) -> Text:

@@ -602,3 +602,16 @@ def test_a_rows_kind_is_read_from_the_backend_and_survives_an_upsert() -> None:
     )
 
     assert state.turns[-1].progress[0].kind == "read"
+
+
+def test_a_slash_suggests_commands_until_an_argument_or_a_message_begins() -> None:
+    from orca.app.commands import suggest
+
+    assert [c.name for c in suggest("/")][:3] == ["chat", "review", "threads"]
+    assert [c.name for c in suggest("/re")] == ["review", "resume"]
+    assert [c.name for c in suggest("/RE")] == ["review", "resume"]
+    assert suggest("/mode ") == ()
+    assert suggest("/re\nview") == ()
+    assert suggest("review") == ()
+    assert suggest("/insp") == ()
+    assert [c.name for c in suggest("/insp", developer=True)] == ["inspect"]
