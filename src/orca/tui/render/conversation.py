@@ -12,6 +12,7 @@ from rich.text import Text
 
 from orca.app.model import (
     Activity,
+    ApprovalRecord,
     AppState,
     Narration,
     ProgressItem,
@@ -19,6 +20,7 @@ from orca.app.model import (
     TurnNote,
     TurnState,
 )
+from orca.tui.render.chrome import render_interaction
 from orca.tui.render.code import code_block
 from orca.tui.render.markdown import answer_markdown
 from orca.tui.render.theme import ACCENT, CALLOUT, ERROR, MUTED, SUCCESS, WARNING
@@ -70,6 +72,18 @@ def render_conversation(state: AppState, *, width: int) -> RenderableType:
                 rows.append(Padding(answer_markdown(segment.text), (0, 1)))
             elif isinstance(segment, TurnNote):
                 rows.append(Padding(_note_row(segment), (0, 1)))
+            elif isinstance(segment, ApprovalRecord):
+                rows.append(Padding(_approval_row(segment), (0, 1)))
+        asked = state.interaction
+        if (
+            asked is not None
+            and asked.kind == "approval"
+            and turn.run_id == state.active_run_id
+            and (prompt := render_interaction(state, width=max(1, width - 2))) is not None
+        ):
+            # The prompt at the end of the turn it belongs to, where the person is reading,
+            # the way an editor's agent asks; its answer takes its place once decided.
+            rows.append(Padding(prompt, (1, 1, 0, 1)))
         if turn.run_id == state.active_run_id and state.working:
             rows.append(Padding(_working(state), (1, 1, 0, 1)))
         for artifact in turn.artifacts:
@@ -293,6 +307,18 @@ def welcome(state: AppState, *, width: int) -> list[RenderableType]:
     )
     tip = Text.assemble(("Tip: ", MUTED), ("/help", ACCENT), (" lists every command", MUTED))
     return [panel, tip]
+
+
+def _approval_row(record: ApprovalRecord) -> RenderableType:
+    approved = record.decision.startswith("Approved")
+    line = Text.assemble(
+        ("✓ " if approved else "✗ ", SUCCESS if approved else ERROR),
+        (record.decision, f"bold {MUTED}"),
+        (f"  {record.title}" if record.title else "", MUTED),
+    )
+    if not record.command:
+        return line
+    return Group(line, Text(f"  $ {record.command}", style=MUTED, overflow="fold"))
 
 
 def _note_row(note: TurnNote) -> Text:

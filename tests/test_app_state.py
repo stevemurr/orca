@@ -547,23 +547,43 @@ def test_a_cancelled_run_keeps_what_the_model_said_and_says_where_it_stopped() -
     )
 
 
-def test_an_approval_decision_is_said_once_near_the_composer_not_in_the_transcript() -> None:
-    state = feed(
-        reduce(_running(), ClockTicked(50.0)).state,
+def test_an_approval_is_kept_in_the_transcript_once_decided() -> None:
+    from orca.app.actions import ApprovalDecided, OperationFailed
+    from orca.app.model import ApprovalRecord
+
+    asked = feed(
+        _running(),
         event(
             2,
             "approval.requested",
-            {"approval_id": "a1", "title": "run: pytest", "allowed_decisions": ["approve"]},
+            {
+                "approval_id": "a1",
+                "title": "run: pytest",
+                "arguments": {"argv": ["/bin/sh", "-c", "pytest"]},
+                "allowed_decisions": ["approve"],
+            },
         ),
-        event(3, "approval.resolved", {"approval_id": "a1", "decision": "allow_always"}),
     )
-    assert state.interaction is None
-    assert state.turns[-1].notes == ()
-    assert state.notices[-1].message == "Approved, and always from now on: run: pytest"
-    assert state.notices[-1].shown_at == 50.0
+    sent = reduce(asked, ApprovalDecided("approve"))
+    assert sent.effects and sent.state.interaction is not None
+    assert sent.state.interaction.sending
+    # A second key while the first is on its way does nothing.
+    assert reduce(sent.state, ApprovalDecided("approve")).effects == ()
+    # A send that failed offers the choices again.
+    retry = reduce(sent.state, OperationFailed("no route")).state
+    assert retry.interaction is not None and not retry.interaction.sending
 
-    quiet = reduce(state, CommandCompleted("resolveapproval", CommandOutcome("allow_always")))
-    assert quiet.state.notices == state.notices
+    decided = feed(
+        sent.state, event(3, "approval.resolved", {"approval_id": "a1", "decision": "allow"})
+    )
+    assert decided.interaction is None
+    assert decided.turns[-1].timeline[-1] == ApprovalRecord(
+        "run: pytest", "/bin/sh -c pytest", "Approved"
+    )
+    assert decided.notices == ()
+
+    quiet = reduce(decided, CommandCompleted("resolveapproval", CommandOutcome("allow")))
+    assert quiet.state.notices == ()
 
 
 def test_tools_toggles_whether_every_call_is_shown() -> None:

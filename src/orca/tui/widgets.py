@@ -27,6 +27,13 @@ class Composer(TextArea):
     class MenuAccepted(Message):
         """Tab: take the highlighted command into the composer without sending it."""
 
+    class Decided(Message):
+        """A key answered the approval shown in the transcript."""
+
+        def __init__(self, decision: str) -> None:
+            super().__init__()
+            self.decision: str = decision
+
     def __init__(self) -> None:
         super().__init__(
             id="composer",
@@ -36,6 +43,9 @@ class Composer(TextArea):
             highlight_cursor_line=False,
             placeholder="Ask the agent…",
         )
+        #: Key to decision while an approval is waiting, set by the host; empty otherwise.
+        #: The keys go to the approval rather than into the text, as they would in a modal.
+        self.approval_keys: dict[str, str] = {}
 
     @property
     def naming_a_command(self) -> bool:
@@ -45,6 +55,15 @@ class Composer(TextArea):
 
     @override
     async def _on_key(self, event: events.Key) -> None:
+        if self.approval_keys:
+            decision = self.approval_keys.get(event.key)
+            if decision is None and event.key == "enter" and not self.text.strip():
+                decision = self.approval_keys.get("1")
+            if decision is not None:
+                event.stop()
+                event.prevent_default()
+                self.post_message(self.Decided(decision))
+                return
         if self.naming_a_command and event.key in {"up", "down", "tab"}:
             event.stop()
             event.prevent_default()

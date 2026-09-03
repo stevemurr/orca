@@ -5,9 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import ClassVar, override
 
-from rich.console import Group, RenderableType
 from rich.text import Text
-from textual import events, on
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Container, VerticalScroll
@@ -15,11 +14,8 @@ from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
-from orca.app.actions import ApprovalDecided
-from orca.app.model import AppState
 from orca.backend import ThreadSummary
-from orca.tui.host import model_host
-from orca.tui.render import render_help, render_interaction
+from orca.tui.render import render_help
 
 
 class HelpScreen(ModalScreen[None]):
@@ -74,64 +70,6 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
-
-
-class ApprovalScreen(ModalScreen[None]):
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("1,y", "choose('approve')", "Approve", show=False),
-        Binding("2", "choose('approve_bash_always')", "Always", show=False),
-        Binding("3,n,escape", "choose('reject')", "Reject", show=False),
-    ]
-
-    def __init__(self, state: AppState) -> None:
-        super().__init__()
-        self._state: AppState = state
-        self._sending: bool = False
-
-    @override
-    def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="modal-card approval-card", id="approval-card"):
-            yield Static(self._content(), id="approval-content")
-
-    def on_resize(self, event: events.Resize) -> None:
-        if self.is_mounted:
-            self.query_one("#approval-content", Static).update(
-                self._content(viewport_width=event.size.width)
-            )
-
-    def action_choose(self, decision: str) -> None:
-        if self._sending:
-            return
-        interaction = self._state.interaction
-        if (
-            decision == "approve_bash_always"
-            and interaction is not None
-            and decision not in interaction.allowed_decisions
-        ):
-            return
-        self._sending = True
-        self.query_one("#approval-content", Static).update(self._content())
-        # Textual leaves `Screen.app` partially unknown; `model_host` is the typed way through.
-        model_host(self.app).apply_model_action(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-            ApprovalDecided(decision)
-        )
-
-    def allow_retry(self) -> None:
-        """Restore choices after the command could not reach the backend."""
-
-        self._sending = False
-        self.query_one("#approval-content", Static).update(self._content())
-
-    def _content(self, *, viewport_width: int | None = None) -> RenderableType:
-        renderable = self._interaction(viewport_width=viewport_width) or Text("Approval")
-        if self._sending:
-            return Group(renderable, Text("Sending…", style="dim"))
-        return renderable
-
-    def _interaction(self, *, viewport_width: int | None = None) -> RenderableType | None:
-        viewport_width = viewport_width or self.app.size.width  # pyright: ignore[reportUnknownMemberType]
-        width = max(1, min(80, viewport_width - 8))
-        return render_interaction(self._state, width=width)
 
 
 def nested_threads(rows: tuple[ThreadSummary, ...]) -> tuple[ThreadSummary, ...]:

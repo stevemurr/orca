@@ -69,15 +69,19 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
         for index, option in enumerate(interaction.options, start=1):
             rows.append(Text.assemble((f"{index}", f"bold {ACCENT}"), (f" {option}", MUTED)))
     if interaction.kind == "approval":
-        choices = Text()
-        choices.append("1", style=f"bold {ACCENT}")
-        choices.append(" approve once   ", style=MUTED)
-        if "approve_bash_always" in interaction.allowed_decisions:
-            choices.append("2", style=f"bold {ACCENT}")
-            choices.append(" always allow   ", style=MUTED)
-        choices.append("3", style=f"bold {ACCENT}")
-        choices.append(" reject", style=MUTED)
-        rows.append(choices)
+        if interaction.sending:
+            rows.append(Text("Sending…", style=MUTED))
+        else:
+            choices = Text()
+            choices.append("1", style=f"bold {ACCENT}")
+            choices.append(" approve once   ", style=MUTED)
+            if "approve_bash_always" in interaction.allowed_decisions:
+                choices.append("2", style=f"bold {ACCENT}")
+                choices.append(" always allow   ", style=MUTED)
+            choices.append("3", style=f"bold {ACCENT}")
+            choices.append(" reject", style=MUTED)
+            choices.append("   enter approve · esc reject", style=MUTED)
+            rows.append(choices)
     elif interaction.options:
         rows.append(Text("Type a number or your own answer below and press Enter.", style=MUTED))
     else:

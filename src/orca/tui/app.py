@@ -15,6 +15,7 @@ from textual.widgets import ContentSwitcher, Static, TextArea
 
 from orca.app.actions import (
     Action,
+    ApprovalDecided,
     Back,
     ClockTicked,
     CommandCompleted,
@@ -46,7 +47,7 @@ from orca.app.update import (
     SwitchWorkspace,
     reduce,
 )
-from orca.backend import BackendError, ResolveApproval, RunRequest, TerminalBackend
+from orca.backend import BackendError, RunRequest, TerminalBackend
 from orca.tui.commands import OrcaCommands
 from orca.tui.render import (
     render_command_menu,
@@ -56,7 +57,7 @@ from orca.tui.render import (
     render_notice,
     render_plan,
 )
-from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen
+from orca.tui.screens import HelpScreen, ThreadPickerScreen
 from orca.tui.views import ConversationView, InspectorView, ReviewView
 from orca.tui.views.base import RenderedView
 from orca.tui.widgets import Composer
@@ -198,7 +199,7 @@ class OrcaApp(App[None]):
         background: $background;
     }
 
-    HelpScreen, ApprovalScreen, ThreadPickerScreen {
+    HelpScreen, ThreadPickerScreen {
         align: center middle;
         background: rgba(0,0,0,0.45);
     }
@@ -251,7 +252,6 @@ class OrcaApp(App[None]):
         super().__init__()
         self.backend: TerminalBackend = backend
         self.model: AppState = initial or AppState()
-        self._approval_request_id: str = ""
         self._closing: bool = False
         #: Whether the shell's widgets exist yet. `App.is_mounted` is a method that takes a
         #: widget, so the old `self.is_mounted` guard was a bound method and always true.
@@ -402,7 +402,11 @@ class OrcaApp(App[None]):
             self.apply_model_action(ComposerChanged(composer.text))
 
     def action_context_escape(self) -> None:
-        if isinstance(self.screen, (HelpScreen, ApprovalScreen)):
+        if isinstance(self.screen, HelpScreen):
+            return
+        asked = self.model.interaction
+        if asked is not None and asked.kind == "approval":
+            self.apply_model_action(ApprovalDecided("reject"))
             return
         if self.model.view is not ViewId.CONVERSATION:
             self.apply_model_action(Back())
@@ -459,18 +463,20 @@ class OrcaApp(App[None]):
             else "Ask the agent…"
         )
         self.query_one("#app-footer", Static).update(render_footer(self.model))
-        self._sync_approval()
+        composer.approval_keys = self._approval_keys()
 
-    def _sync_approval(self) -> None:
-        interaction = self.model.interaction
-        if interaction is not None and interaction.kind == "approval":
-            if self._approval_request_id != interaction.request_id:
-                self._approval_request_id = interaction.request_id
-                self.push_screen(ApprovalScreen(self.model))
-            return
-        self._approval_request_id = ""
-        if isinstance(self.screen, ApprovalScreen):
-            self.screen.dismiss()
+    def _approval_keys(self) -> dict[str, str]:
+        asked = self.model.interaction
+        if asked is None or asked.kind != "approval" or asked.sending:
+            return {}
+        keys = {"1": "approve", "y": "approve", "3": "reject", "n": "reject", "escape": "reject"}
+        if "approve_bash_always" in asked.allowed_decisions:
+            keys["2"] = "approve_bash_always"
+        return keys
+
+    @on(Composer.Decided)
+    def composer_decided(self, message: Composer.Decided) -> None:
+        self.apply_model_action(ApprovalDecided(message.decision))
 
     def _perform(self, effect: Effect) -> None:
         match effect:
@@ -592,10 +598,7 @@ class OrcaApp(App[None]):
         try:
             outcome = await self.backend.send_command(effect.run_id, effect.command)
         except BackendError as exc:
-            if isinstance(effect.command, ResolveApproval) and isinstance(
-                self.screen, ApprovalScreen
-            ):
-                self.screen.allow_retry()
+            # A failed decision is offered again: the reducer clears `sending` on failure.
             self.apply_model_action(OperationFailed(str(exc)))
             return
         self.apply_model_action(CommandCompleted(type(effect.command).__name__.lower(), outcome))

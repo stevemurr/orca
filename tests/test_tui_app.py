@@ -23,7 +23,7 @@ from orca.backend import (
 )
 from orca.json_types import JsonObject
 from orca.tui.app import OrcaApp
-from orca.tui.screens import ApprovalScreen, HelpScreen, ThreadPickerScreen, nested_threads
+from orca.tui.screens import HelpScreen, ThreadPickerScreen, nested_threads
 from orca.tui.widgets import Composer
 
 
@@ -209,7 +209,7 @@ async def test_approval_shortcuts_dispatch_typed_command() -> None:
         assert backend.commands == [("run-1", ResolveApproval("approval-1", "approve"))]
 
 
-async def test_failed_approval_command_can_be_retried_in_the_same_modal() -> None:
+async def test_failed_approval_command_can_be_answered_again() -> None:
     backend = RetryApprovalBackend()
     app = OrcaApp(backend)
 
@@ -291,10 +291,13 @@ async def test_help_overlay_scrolls_on_a_short_terminal() -> None:
         assert card.scroll_y == card.max_scroll_y
 
 
-async def test_approval_overlay_scrolls_on_a_tiny_terminal() -> None:
-    app = OrcaApp(FakeBackend())
+async def test_an_approval_is_asked_in_the_transcript_and_kept_there_once_decided() -> None:
+    from orca.app.model import ApprovalRecord
 
-    async with app.run_test(size=(30, 15)) as pilot:
+    backend = FakeBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
         app.apply_model_action(RunAccepted("run-1", "thread-1"))
         app.apply_model_action(
@@ -304,8 +307,8 @@ async def test_approval_overlay_scrolls_on_a_tiny_terminal() -> None:
                     "approval.requested",
                     {
                         "approval_id": "approval-1",
-                        "title": "Run a deliberately long command on the local workspace?",
-                        "command": "python -m pytest tests/with/a/very/long/path",
+                        "title": "Run the tests?",
+                        "arguments": {"argv": ["/bin/sh", "-c", "pytest -q"]},
                         "allowed_decisions": ["approve", "approve_bash_always", "reject"],
                     },
                 )
@@ -313,45 +316,27 @@ async def test_approval_overlay_scrolls_on_a_tiny_terminal() -> None:
         )
         await pilot.pause()
 
-        assert isinstance(app.screen, ApprovalScreen)
-        card = app.screen.query_one("#approval-card")
-        if card.max_scroll_y:
-            card.scroll_end(animate=False)
-            await pilot.pause()
-            assert card.scroll_y == card.max_scroll_y
-        else:
-            assert card.virtual_size.height <= card.size.height
+        assert len(app.screen_stack) == 1  # no modal
+        assert app.model.interaction is not None and app.model.interaction.kind == "approval"
+        assert app.query_one(Composer).approval_keys["2"] == "approve_bash_always"
 
-
-async def test_approval_overlay_reflows_when_the_terminal_is_resized() -> None:
-    app = OrcaApp(FakeBackend())
-
-    async with app.run_test(size=(80, 30)) as pilot:
+        await pilot.press("escape")
         await pilot.pause()
-        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        assert backend.commands == [("run-1", ResolveApproval("approval-1", "reject"))]
+        assert app.model.interaction is not None and app.model.interaction.sending
+
         app.apply_model_action(
             EventReceived(
-                event(
-                    1,
-                    "approval.requested",
-                    {
-                        "approval_id": "approval-1",
-                        "title": "Run a deliberately long command on the local workspace?",
-                        "command": "python -m pytest tests/with/a/very/long/path",
-                        "allowed_decisions": ["approve", "approve_bash_always", "reject"],
-                    },
-                )
+                event(2, "approval.resolved", {"approval_id": "approval-1", "decision": "deny"})
             )
         )
         await pilot.pause()
-        card = app.screen.query_one("#approval-card")
 
-        await pilot.resize_terminal(30, 15)
-        await pilot.pause()
-        await pilot.pause()
-
-        assert card.virtual_size.width <= card.size.width
-        assert card.max_scroll_x == 0
+        assert app.model.interaction is None
+        assert app.model.turns[-1].timeline[-1] == ApprovalRecord(
+            "Run the tests?", "/bin/sh -c 'pytest -q'", "Rejected"
+        )
+        assert app.query_one(Composer).approval_keys == {}
 
 
 async def test_inspector_restarts_follow_with_developer_visibility() -> None:

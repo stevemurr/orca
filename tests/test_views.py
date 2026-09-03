@@ -456,3 +456,44 @@ def test_the_latest_group_of_a_working_turn_shines_between_calls() -> None:
     )
     rendered = plain(render_conversation(replace(state, turns=(turn,)), width=90), width=90)
     assert "read file2.py  ·  3 tool calls ›" in rendered
+
+
+def test_an_approval_is_asked_at_the_end_of_its_turn_and_its_answer_stays() -> None:
+    from orca.app.model import ApprovalRecord, InteractionState
+
+    state = replace(
+        populated_state(),
+        run_status=RunStatus.AWAITING_APPROVAL,
+        interaction=InteractionState(
+            kind="approval",
+            request_id="a1",
+            title="Run the tests?",
+            command="pytest -q",
+            allowed_decisions=("approve", "approve_bash_always", "reject"),
+        ),
+    )
+    asked = plain(render_conversation(state, width=90), width=90)
+    assert asked.index("Building the terminal shell") < asked.index("Run the tests?")
+    assert "$ pytest -q" in asked
+    assert "1 approve once" in asked and "2 always allow" in asked and "3 reject" in asked
+
+    turn = state.turns[-1]
+    kept = replace(
+        state,
+        interaction=None,
+        run_status=RunStatus.COMPLETED,
+        active_run_id=None,
+        turns=(
+            replace(
+                turn,
+                timeline=(
+                    *turn.timeline,
+                    ApprovalRecord("Run the tests?", "pytest -q", "Approved"),
+                ),
+                answer="Done.",
+            ),
+        ),
+    )
+    rendered = plain(render_conversation(kept, width=90), width=90)
+    assert "✓ Approved  Run the tests?" in rendered
+    assert "1 approve once" not in rendered

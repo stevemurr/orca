@@ -32,6 +32,7 @@ from orca.app.actions import (
 from orca.app.commands import parse_input
 from orca.app.model import (
     Activity,
+    ApprovalRecord,
     AppState,
     ArtifactOffer,
     InteractionState,
@@ -249,7 +250,12 @@ def reduce(state: AppState, action: Action) -> Transition:
     if isinstance(action, ClockTicked):
         return Transition(replace(state, clock=action.now))
     if isinstance(action, OperationFailed):
-        return Transition(_notice(replace(state, submitting=False), action.message, "error"))
+        failed = replace(state, submitting=False)
+        asked = state.interaction
+        if asked is not None and asked.kind == "approval" and asked.sending:
+            # The decision did not reach the backend; offer the choices again.
+            failed = replace(failed, interaction=replace(asked, sending=False))
+        return Transition(_notice(failed, action.message, "error"))
     if isinstance(action, EventReceived):
         return _event(state, action.event)
     if isinstance(action, ThreadSelected):
@@ -316,8 +322,10 @@ def reduce(state: AppState, action: Action) -> Transition:
             return Transition(_notice(state, "Nothing is awaiting approval."))
         if interaction.allowed_decisions and action.decision not in interaction.allowed_decisions:
             return Transition(_notice(state, "That approval choice is not available.", "warning"))
+        if interaction.sending:
+            return Transition(state)
         return Transition(
-            state,
+            replace(state, interaction=replace(interaction, sending=True)),
             (
                 SendRunCommand(
                     state.active_run_id,
@@ -601,13 +609,19 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
 
     if kind == "approval.resolved":
-        # Said once, near the composer, and gone: the decision is not part of what the run
-        # did, and the transcript already shows the call it was about.
+        # The prompt was in the transcript; its answer stays there, where it was decided,
+        # as an editor's agent keeps it. The tool row that follows shows what was done.
         decided = replace(state, interaction=None, run_status=RunStatus.RUNNING)
         asked = state.interaction
-        title = asked.title if asked is not None and asked.kind == "approval" else ""
-        verdict = _decision_label(_string(payload, "decision"))
-        return Transition(_notice(decided, f"{verdict}: {title}" if title else verdict))
+        record = ApprovalRecord(
+            title=asked.title if asked is not None and asked.kind == "approval" else "",
+            command=asked.command if asked is not None and asked.kind == "approval" else "",
+            decision=_decision_label(_string(payload, "decision")),
+        )
+        turn = _latest_turn(decided)
+        return Transition(
+            _replace_latest_turn(decided, replace(turn, timeline=(*turn.timeline, record)))
+        )
 
     if kind == "question.resolved":
         return Transition(replace(state, interaction=None, run_status=RunStatus.RUNNING))
