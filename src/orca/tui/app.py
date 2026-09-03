@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from collections.abc import Callable
+from typing import ClassVar, assert_never, cast, override
 
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.command import Provider
 from textual.containers import Horizontal, Vertical
 from textual.widgets import ContentSwitcher, Static, TextArea
 
@@ -55,13 +57,15 @@ from orca.tui.widgets import Composer
 class OrcaApp(App[None]):
     """One cursor owner, one store, and multiple quiet terminal views."""
 
-    TITLE = "orca"
-    COMMANDS = App.COMMANDS | {OrcaCommands}
+    TITLE: str | None = "orca"
+    COMMANDS: ClassVar[set[type[Provider] | Callable[[], type[Provider]]]] = App.COMMANDS | {
+        OrcaCommands
+    }
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "context_escape", "Back", show=False),
         Binding("ctrl+q", "quit", "Quit", show=False),
     ]
-    CSS = """
+    CSS: ClassVar[str] = """
     Screen {
         background: $background;
         color: $text;
@@ -199,11 +203,15 @@ class OrcaApp(App[None]):
 
     def __init__(self, backend: TerminalBackend, *, initial: AppState | None = None) -> None:
         super().__init__()
-        self.backend = backend
-        self.model = initial or AppState()
-        self._approval_request_id = ""
-        self._closing = False
+        self.backend: TerminalBackend = backend
+        self.model: AppState = initial or AppState()
+        self._approval_request_id: str = ""
+        self._closing: bool = False
+        #: Whether the shell's widgets exist yet. `App.is_mounted` is a method that takes a
+        #: widget, so the old `self.is_mounted` guard was a bound method and always true.
+        self._shell_ready: bool = False
 
+    @override
     def compose(self) -> ComposeResult:
         with Vertical(id="shell"):
             yield Static(id="app-header")
@@ -218,8 +226,8 @@ class OrcaApp(App[None]):
             yield Static(id="app-footer")
 
     def on_mount(self) -> None:
+        self._shell_ready = True
         self.apply_model_action(ViewportChanged(self.size.width, self.size.height))
-        self._render_model()
         self.run_worker(
             self._boot(),
             name="bootstrap",
@@ -240,7 +248,7 @@ class OrcaApp(App[None]):
     def apply_model_action(self, action: Action) -> None:
         transition = reduce(self.model, action)
         self.model = transition.state
-        if self.is_mounted and not isinstance(action, ComposerChanged):
+        if self._shell_ready and not isinstance(action, ComposerChanged):
             self._render_model()
         for effect in transition.effects:
             self._perform(effect)
@@ -274,6 +282,7 @@ class OrcaApp(App[None]):
         elif self.model.active_run_id:
             self.apply_model_action(CommandInvoked("pause"))
 
+    @override
     async def action_quit(self) -> None:
         self.apply_model_action(CommandInvoked("quit"))
 
@@ -319,57 +328,60 @@ class OrcaApp(App[None]):
             self.screen.dismiss()
 
     def _perform(self, effect: Effect) -> None:
-        if isinstance(effect, StartRun):
-            self.run_worker(
-                self._start_run(effect),
-                name="start-run",
-                group="submission",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        elif isinstance(effect, SendRunCommand):
-            self.run_worker(
-                self._send_command(effect),
-                name=f"command:{effect.command}",
-                group="commands",
-                exit_on_error=False,
-            )
-        elif isinstance(effect, OpenHelp):
-            self.push_screen(HelpScreen(developer=self.model.developer))
-        elif isinstance(effect, OpenThreads):
-            self.run_worker(
-                self._open_threads(),
-                name="recent-threads",
-                group="recent-threads",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        elif isinstance(effect, LoadThread):
-            self.run_worker(
-                self._load_thread(effect),
-                name=f"thread:{effect.thread_id}",
-                group="thread-load",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        elif isinstance(effect, FollowRun):
-            self.run_worker(
-                self._follow(effect.run_id, after_seq=effect.after_seq),
-                name=f"stream:{effect.run_id}",
-                group="stream",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        elif isinstance(effect, SwitchWorkspace):
-            self.run_worker(
-                self._switch_workspace(effect.selector),
-                name="switch-workspace",
-                group="workspace",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        elif isinstance(effect, ExitApplication):
-            self.exit()
+        match effect:
+            case StartRun():
+                self.run_worker(
+                    self._start_run(effect),
+                    name="start-run",
+                    group="submission",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case SendRunCommand():
+                self.run_worker(
+                    self._send_command(effect),
+                    name=f"command:{effect.command}",
+                    group="commands",
+                    exit_on_error=False,
+                )
+            case OpenHelp():
+                self.push_screen(HelpScreen(developer=self.model.developer))
+            case OpenThreads():
+                self.run_worker(
+                    self._open_threads(),
+                    name="recent-threads",
+                    group="recent-threads",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case LoadThread():
+                self.run_worker(
+                    self._load_thread(effect),
+                    name=f"thread:{effect.thread_id}",
+                    group="thread-load",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case FollowRun():
+                self.run_worker(
+                    self._follow(effect.run_id, after_seq=effect.after_seq),
+                    name=f"stream:{effect.run_id}",
+                    group="stream",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case SwitchWorkspace():
+                self.run_worker(
+                    self._switch_workspace(effect.selector),
+                    name="switch-workspace",
+                    group="workspace",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case ExitApplication():
+                self.exit()
+            case _:
+                assert_never(effect)
 
     async def _boot(self) -> None:
         try:

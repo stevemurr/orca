@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import override
+
 from textual import events
 from textual.message import Message
 from textual.widgets import TextArea
@@ -13,7 +15,7 @@ class Composer(TextArea):
     class Submitted(Message):
         def __init__(self, text: str) -> None:
             super().__init__()
-            self.text = text
+            self.text: str = text
 
     def __init__(self) -> None:
         super().__init__(
@@ -25,6 +27,7 @@ class Composer(TextArea):
             placeholder="Ask the agent…",
         )
 
+    @override
     async def _on_key(self, event: events.Key) -> None:
         if event.key == "enter":
             event.stop()

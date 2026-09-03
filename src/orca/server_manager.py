@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Self, cast
+from typing import BinaryIO, Self, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -85,15 +85,15 @@ class _Receipt:
     started_at: str
 
     @classmethod
-    def from_json(cls, value: object) -> _Receipt | None:
-        if not isinstance(value, dict):
+    def from_json(cls, value: JsonValue) -> _Receipt | None:
+        if not isinstance(value, Mapping):
             return None
         try:
             receipt = cls(
                 endpoint=str(value["endpoint"]),
                 instance_id=str(value["instance_id"]),
-                pid=int(value["pid"]),
-                pgid=int(value["pgid"]),
+                pid=_as_int(value["pid"]),
+                pgid=_as_int(value["pgid"]),
                 started_at=str(value["started_at"]),
             )
         except (KeyError, TypeError, ValueError):
@@ -153,6 +153,12 @@ def can_manage(connection: Connection) -> bool:
     )
 
 
+def _as_int(value: JsonValue) -> int:
+    if isinstance(value, (int, float, str)):
+        return int(value)
+    raise ValueError(f"not a number: {value!r}")
+
+
 def _management_home() -> Path:
     configured = os.environ.get(CONFIG_HOME_ENV, "").strip()
     return Path(configured).expanduser() if configured else Path.home() / ".orca"
@@ -162,9 +168,9 @@ class _LifecycleLock:
     """A small cross-process lock around state inspection and process creation."""
 
     def __init__(self, path: Path, timeout_s: float = _START_TIMEOUT_S) -> None:
-        self.path = path
-        self.timeout_s = timeout_s
-        self._stream = None
+        self.path: Path = path
+        self.timeout_s: float = timeout_s
+        self._stream: BinaryIO | None = None
 
     async def __aenter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,12 +225,12 @@ class _LifecycleLock:
 
 class LocalServerManager:
     def __init__(self, connection: Connection) -> None:
-        self.connection = connection
-        self.home = _management_home()
-        self.runtime = self.home / "cli"
-        self.state_path = self.runtime / "managed-server.json"
-        self.log_path = self.runtime / "server.log"
-        self.lock_path = self.runtime / "server.lock"
+        self.connection: Connection = connection
+        self.home: Path = _management_home()
+        self.runtime: Path = self.home / "cli"
+        self.state_path: Path = self.runtime / "managed-server.json"
+        self.log_path: Path = self.runtime / "server.log"
+        self.lock_path: Path = self.runtime / "server.lock"
 
     def _require_eligible(self) -> None:
         if not can_manage(self.connection):
@@ -267,7 +273,7 @@ class LocalServerManager:
 
     def _read_receipt(self) -> _Receipt | None:
         try:
-            recorded = cast(object, json.loads(self.state_path.read_text(encoding="utf-8")))
+            recorded = cast(JsonValue, json.loads(self.state_path.read_text(encoding="utf-8")))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         return _Receipt.from_json(recorded)

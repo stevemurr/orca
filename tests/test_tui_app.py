@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import override
 
 from textual.widgets import ContentSwitcher
 
@@ -34,7 +35,7 @@ class FakeBackend:
         self.started: list[str] = []
         self.commands: list[tuple[str, Command]] = []
         self.streams: list[tuple[str, int, bool]] = []
-        self.closed = False
+        self.closed: bool = False
 
     async def connect(self) -> SessionInfo:
         return SessionInfo(
@@ -122,8 +123,9 @@ class FakeBackend:
 class RetryApprovalBackend(FakeBackend):
     def __init__(self) -> None:
         super().__init__()
-        self.fail_once = True
+        self.fail_once: bool = True
 
+    @override
     async def send_command(self, run_id: str, command: Command) -> CommandOutcome:
         if self.fail_once:
             self.fail_once = False

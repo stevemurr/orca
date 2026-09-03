@@ -142,7 +142,7 @@ class KeyringCredentialStore:
     """
 
     def __init__(self, service: str = "orca") -> None:
-        self._service = service
+        self._service: str = service
 
     @staticmethod
     def _keyring():
@@ -171,6 +171,7 @@ class KeyringCredentialStore:
     def _backend_failure(exc: Exception) -> CredentialBackendUnavailable:
         # Backend exception strings can include helper command lines and platform details.  Keep
         # output stable and, most importantly, never risk reflecting credential material.
+        del exc
         return CredentialBackendUnavailable("the system credential backend operation failed")
 
     def get(self, profile: str, endpoint: str) -> str | None:
@@ -227,14 +228,14 @@ class ConfigRepository:
     ) -> None:
         environment = os.environ if environ is None else environ
         configured_home = environment.get(CONFIG_HOME_ENV)
-        self._home = (
+        self._home: Path = (
             home
             if home is not None
             else Path(configured_home).expanduser()
             if configured_home
             else Path.home() / ".orca"
         )
-        self.path = self._home / "config.toml"
+        self.path: Path = self._home / "config.toml"
 
     def load(self) -> ClientConfig:
         if not self.path.exists():

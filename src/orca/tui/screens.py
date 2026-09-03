@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar, override
 
 from rich.console import Group, RenderableType
 from rich.text import Text
 from textual import events, on
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
@@ -22,12 +23,13 @@ from orca.tui.render import render_help, render_interaction
 
 
 class HelpScreen(ModalScreen[None]):
-    BINDINGS = (Binding("escape", "dismiss", "Close", show=False),)
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss", "Close", show=False)]
 
     def __init__(self, *, developer: bool = False) -> None:
         super().__init__()
-        self._developer = developer
+        self._developer: bool = developer
 
+    @override
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-card", id="help-card"):
             yield Static(render_help(developer=self._developer))
@@ -37,13 +39,16 @@ class HelpScreen(ModalScreen[None]):
 class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
     """Choose a durable thread without replacing the persistent application shell."""
 
-    BINDINGS = (Binding("escape", "close", "Close", show=False),)
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "close", "Close", show=False)]
 
     def __init__(self, rows: tuple[ThreadSummary, ...]) -> None:
         super().__init__()
-        self._rows = rows
-        self._choices = {row.thread_id: (row.thread_id, row.title) for row in rows}
+        self._rows: tuple[ThreadSummary, ...] = rows
+        self._choices: dict[str, tuple[str, str]] = {
+            row.thread_id: (row.thread_id, row.title) for row in rows
+        }
 
+    @override
     def compose(self) -> ComposeResult:
         with Container(classes="modal-card thread-card"):
             yield Static("Recent conversations", classes="modal-title")
@@ -72,17 +77,18 @@ class ThreadPickerScreen(ModalScreen[tuple[str, str] | None]):
 
 
 class ApprovalScreen(ModalScreen[None]):
-    BINDINGS = (
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("1,y", "choose('approve')", "Approve", show=False),
         Binding("2", "choose('approve_bash_always')", "Always", show=False),
         Binding("3,n,escape", "choose('reject')", "Reject", show=False),
-    )
+    ]
 
     def __init__(self, state: AppState) -> None:
         super().__init__()
-        self._state = state
-        self._sending = False
+        self._state: AppState = state
+        self._sending: bool = False
 
+    @override
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-card approval-card", id="approval-card"):
             yield Static(self._content(), id="approval-content")
@@ -105,7 +111,10 @@ class ApprovalScreen(ModalScreen[None]):
             return
         self._sending = True
         self.query_one("#approval-content", Static).update(self._content())
-        model_host(self.app).apply_model_action(ApprovalDecided(decision))
+        # Textual leaves `Screen.app` partially unknown; `model_host` is the typed way through.
+        model_host(self.app).apply_model_action(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+            ApprovalDecided(decision)
+        )
 
     def allow_retry(self) -> None:
         """Restore choices after the command could not reach the backend."""
@@ -120,7 +129,7 @@ class ApprovalScreen(ModalScreen[None]):
         return renderable
 
     def _interaction(self, *, viewport_width: int | None = None) -> RenderableType | None:
-        viewport_width = viewport_width or self.app.size.width
+        viewport_width = viewport_width or self.app.size.width  # pyright: ignore[reportUnknownMemberType]
         width = max(1, min(80, viewport_width - 8))
         return render_interaction(self._state, width=width)
 

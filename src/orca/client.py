@@ -64,8 +64,8 @@ def stream_end_reason(event: SSEEvent) -> str | None:
 
 class ApiError(RuntimeError):
     def __init__(self, status: int, code: str, message: str) -> None:
-        self.status = status
-        self.code = code
+        self.status: int = status
+        self.code: str = code
         # A zero status is a client-side failure with no response behind it — the reconnect
         # ceiling below. Printing "0 stream_unreachable" would invent an HTTP status.
         prefix = f"{status} " if status else ""
@@ -127,10 +127,10 @@ QueryParams = Mapping[str, str | int | None]
 
 class HttpApiClient:
     def __init__(self, base_url: str, token: str = "", timeout: float = 30.0) -> None:
-        self._origin = base_url.rstrip("/")
-        self._base = self._origin + API_PREFIX
+        self._origin: str = base_url.rstrip("/")
+        self._base: str = self._origin + API_PREFIX
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        self._client = httpx.AsyncClient(headers=headers, timeout=timeout)
+        self._client: httpx.AsyncClient = httpx.AsyncClient(headers=headers, timeout=timeout)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -324,7 +324,7 @@ class HttpApiClient:
         log.
         """
         events: list[SSEEvent] = []
-        parser = _SSEParser()
+        parser = SSEParser()
         async with self._client.stream(
             "GET",
             f"{self._base}/runs/{run_id}/events",
@@ -378,7 +378,7 @@ class HttpApiClient:
                     if resp.status_code >= 400:
                         await resp.aread()
                         raise _error_for(resp)
-                    parser = _SSEParser()
+                    parser = SSEParser()
                     async for line in resp.aiter_lines():
                         for event in parser.feed(line):
                             if event.id and event.id.isdigit():
@@ -421,7 +421,7 @@ async def _pause_before_reconnect(attempt: int) -> None:
     await asyncio.sleep(min(_RECONNECT_CAP_S, _RECONNECT_BASE_S * 2.0 ** (attempt - 1)))
 
 
-class _SSEParser:
+class SSEParser:
     """Incremental SSE framing.
 
     A blank line terminates an event and `data:` may repeat within one, which is why the
@@ -431,7 +431,7 @@ class _SSEParser:
 
     def __init__(self) -> None:
         self._id: str | None = None
-        self._event = "message"
+        self._event: str = "message"
         self._data: list[str] = []
 
     def feed(self, line: str) -> list[SSEEvent]:

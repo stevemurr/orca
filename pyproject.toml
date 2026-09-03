@@ -47,6 +47,12 @@ ignore = [
 [tool.basedpyright]
 include = ["src", "tests"]
 pythonVersion = "3.12"
+# `typer.Option(...)` in a parameter default is the documented Typer idiom; this is the same
+# call ruff's B008 is ignored for above.
+reportCallInDefaultInitializer = false
+# `write()`, `run_worker()`, `push_screen()` and their like return values nothing here needs.
+# Assigning each one to `_` would say less than leaving it.
+reportUnusedCallResult = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

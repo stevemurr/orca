@@ -11,7 +11,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from orca.app.model import TaskEvent, ThreadReplay
 from orca.backend import (
@@ -97,7 +97,7 @@ def _wire(command: Command) -> dict[str, str]:
     The wire vocabulary is unchanged by typing the Python side -- `type` is still the same
     six strings a backend already matches on -- so this is a translation, not a protocol
     change. Exhaustive by construction: a new member of the union that is not handled here
-    reaches the final raise rather than being sent as a body with no `type`.
+    is a type error at `assert_never` rather than a body sent with no `type`.
     """
     match command:
         case Pause():
@@ -116,7 +116,7 @@ def _wire(command: Command) -> dict[str, str]:
                 "approval_id": approval_id,
                 "decision": decision,
             }
-    raise BackendError(f"unsupported command: {command!r}")
+    assert_never(command)
 
 
 class HttpBackend:
@@ -132,17 +132,17 @@ class HttpBackend:
         server_ensurer: ServerEnsurer = ensure_local_server,
         workspace_resolver: WorkspaceResolver = resolve_workspace_binding,
     ) -> None:
-        self.connection = connection
-        self._workspace_selector = workspace_selector
-        self._launch_path = (launch_path or Path.cwd()).expanduser().resolve()
+        self.connection: Connection = connection
+        self._workspace_selector: str = workspace_selector
+        self._launch_path: Path = (launch_path or Path.cwd()).expanduser().resolve()
         self._client: _BackendHttpClient = client or HttpApiClient(
             connection.endpoint,
             connection.token,
         )
-        self._server_ensurer = server_ensurer
-        self._workspace_resolver = workspace_resolver
+        self._server_ensurer: ServerEnsurer = server_ensurer
+        self._workspace_resolver: WorkspaceResolver = workspace_resolver
         self._binding: WorkspaceBinding | None = None
-        self._protocol_version = ""
+        self._protocol_version: str = ""
 
     async def connect(self) -> SessionInfo:
         try:

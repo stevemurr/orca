@@ -38,12 +38,15 @@ class _Credentials:
 
 class _UnavailableCredentials:
     def get(self, profile: str, endpoint: str) -> str | None:
+        del profile, endpoint
         raise CredentialBackendUnavailable("no system credential backend is available")
 
     def set(self, profile: str, endpoint: str, token: str) -> None:
+        del profile, endpoint, token
         raise CredentialBackendUnavailable("no system credential backend is available")
 
     def delete(self, profile: str, endpoint: str) -> bool:
+        del profile, endpoint
         raise CredentialBackendUnavailable("no system credential backend is available")
 
 

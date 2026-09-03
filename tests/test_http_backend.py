@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -20,7 +21,7 @@ class FakeClient:
         self.created_threads: list[dict[str, object]] = []
         self.created_runs: list[dict[str, object]] = []
         self.commands: list[dict[str, object]] = []
-        self.closed = False
+        self.closed: bool = False
 
     async def capabilities(self) -> JsonObject:
         return {"protocol_version": "1.6"}
@@ -221,6 +222,7 @@ async def test_a_server_that_is_not_a_harness_says_so() -> None:
     """
 
     class NotAHarness(FakeClient):
+        @override
         async def capabilities(self) -> JsonObject:
             raise ApiError(404, "not_found", "Not Found")
 

@@ -19,7 +19,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from orca.client import HttpApiClient, _SSEParser
+from orca.client import HttpApiClient, SSEParser
 
 TERMINAL_RUN = (
     b'id: 1\ndata: {"event_id": "evt-1", "seq": 1, "type": "run.created", '
@@ -103,7 +103,7 @@ async def test_stream_end_written_as_a_data_type_never_ends_the_follow(
 
 
 def test_parser_reads_comments_and_repeated_data_lines() -> None:
-    parser = _SSEParser()
+    parser = SSEParser()
 
     assert parser.feed(": keepalive") == []
     assert parser.feed("id: 7") == []

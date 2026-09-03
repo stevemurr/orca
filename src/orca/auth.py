@@ -124,7 +124,6 @@ def create_auth_app(
                 store.delete(profile, endpoint)
             raise
 
-    @application.command("login")
     def login(
         profile: str | None = typer.Option(None, "--profile", "-p", help="Profile name."),
         url: str | None = typer.Option(None, "--url", help="Backend base URL."),
@@ -175,7 +174,6 @@ def create_auth_app(
             ("credential", f"bound to {_credential_binding(connection.endpoint)}"),
         )
 
-    @application.command("status")
     def status(
         profile: str | None = typer.Option(None, "--profile", "-p", help="Profile name."),
         url: str | None = typer.Option(None, "--url", help="Inspect this exact endpoint."),
@@ -226,7 +224,6 @@ def create_auth_app(
         else:
             typer.echo("No credential configured.")
 
-    @application.command("logout")
     def logout(
         profile: str | None = typer.Option(None, "--profile", "-p", help="Profile name."),
         url: str | None = typer.Option(None, "--url", help="Remove only this endpoint binding."),
@@ -272,6 +269,10 @@ def create_auth_app(
                 + "unset or remove that explicit source to finish logging out."
             )
 
+    # Registered here rather than with decorators, so each command is a name this function
+    # visibly uses; a decorator alone reads as an unused nested function.
+    for name, command in (("login", login), ("status", status), ("logout", logout)):
+        application.command(name)(command)
     return application
 
 

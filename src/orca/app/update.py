@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from typing import assert_never
 
 from orca.app.actions import (
     Action,
@@ -301,9 +302,14 @@ def reduce(state: AppState, action: Action) -> Transition:
                 ),
             ),
         )
-    if isinstance(action, CommandCompleted):
-        return Transition(_notice(state, f"{action.command}: {action.outcome.status or 'sent'}"))
-    raise TypeError(f"unsupported action: {type(action).__name__}")
+    match action:
+        case CommandCompleted():
+            return Transition(
+                _notice(state, f"{action.command}: {action.outcome.status or 'sent'}")
+            )
+        case _:
+            # A new `Action` member fails here at type-check time, not as a runtime TypeError.
+            assert_never(action)
 
 
 def _command(state: AppState, name: str, argument: str) -> Transition:

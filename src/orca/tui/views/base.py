@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Protocol
+from typing import ClassVar, Protocol, override
 
 from rich.console import RenderableType
 from textual.app import ComposeResult
@@ -25,6 +25,7 @@ class RenderedView(VerticalScroll):
     renderer: ClassVar[StateRenderer]
     follow_output: ClassVar[bool] = False
 
+    @override
     def compose(self) -> ComposeResult:
         yield Static(id=f"{self.id}-content" if self.id else None)
 

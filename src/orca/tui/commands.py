@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import override
 
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 
@@ -15,6 +16,7 @@ class OrcaCommands(Provider):
     def _host(self) -> ModelHost:
         return model_host(self.app)
 
+    @override
     async def discover(self) -> Hits:
         host = self._host
         for command in visible_commands(developer=host.model.developer):
@@ -24,6 +26,7 @@ class OrcaCommands(Provider):
                 help=command.summary,
             )
 
+    @override
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
         host = self._host

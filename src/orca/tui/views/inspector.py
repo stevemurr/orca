@@ -1,8 +1,10 @@
 """Developer-only event inspector."""
 
+from typing import ClassVar
+
 from orca.tui.render import render_inspector
-from orca.tui.views.base import RenderedView
+from orca.tui.views.base import RenderedView, StateRenderer
 
 
 class InspectorView(RenderedView):
-    renderer = staticmethod(render_inspector)
+    renderer: ClassVar[StateRenderer] = staticmethod(render_inspector)

@@ -18,7 +18,7 @@ STUB = Path(__file__).parent / "support" / "stub_backend.py"
 
 
 @pytest.fixture(autouse=True)
-def _configured_server_command(monkeypatch) -> None:
+def configured_server_command(monkeypatch: pytest.MonkeyPatch) -> None:
     """Process management is configuration, so every case here has to supply it."""
 
     monkeypatch.setenv("ORCA_SERVER_COMMAND", f"{sys.executable} {STUB}")
@@ -32,7 +32,9 @@ def _connection(profile: str, endpoint: str) -> Connection:
     )
 
 
-def test_management_is_unavailable_until_a_launch_command_is_configured(monkeypatch) -> None:
+def test_management_is_unavailable_until_a_launch_command_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """orca cannot guess how to start a harness, and does not pretend it can."""
 
     monkeypatch.delenv("ORCA_SERVER_COMMAND")
@@ -50,7 +52,9 @@ def test_only_the_default_plaintext_loopback_profile_can_be_managed() -> None:
     assert not can_manage(_connection("default", "http://backend.example:8420"))
 
 
-async def test_chat_lifecycle_check_does_not_probe_or_launch_a_remote_profile(monkeypatch) -> None:
+async def test_chat_lifecycle_check_does_not_probe_or_launch_a_remote_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     manager = LocalServerManager(_connection("work", "https://backend.example"))
 
     async def unexpected_probe():
@@ -65,7 +69,7 @@ async def test_chat_lifecycle_check_does_not_probe_or_launch_a_remote_profile(mo
 
 
 def test_server_commands_start_inspect_and_stop_one_background_process(
-    monkeypatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))

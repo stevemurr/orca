@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import cast
+from typing import cast, override
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,6 +34,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @override
     def log_message(self, format: str, *args: object) -> None:
         del format, args
 

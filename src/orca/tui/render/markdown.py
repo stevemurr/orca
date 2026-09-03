@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import override
 
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markdown import Markdown
@@ -51,6 +52,7 @@ _CODE_FENCE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
 class AnswerMarkdown(Markdown):
     """Markdown whose semantic styles remain legible inside Textual's console theme."""
 
+    @override
     def __rich_console__(
         self,
         console: Console,

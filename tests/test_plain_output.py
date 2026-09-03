@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
 from io import StringIO
-from typing import cast
+from typing import cast, override
 
 import orjson
 
@@ -16,10 +16,12 @@ from tests.support.backends import ScriptedBackend
 
 
 class PlainBackend(ScriptedBackend):
+    @override
     async def start_run(self, request: RunRequest) -> RunInfo:
         assert request.workspace_id == "ws-1"
         return self.accepted
 
+    @override
     def events(self) -> Sequence[TaskEvent]:
         return (
             TaskEvent(1, "evt-1", "run.created", "user", {"message": "Build it"}),
@@ -35,6 +37,7 @@ class PlainBackend(ScriptedBackend):
 
 
 class ApprovalBackend(PlainBackend):
+    @override
     async def stream(
         self, run_id: str, *, after_seq: int, developer: bool
     ) -> AsyncGenerator[TaskEvent, None]:
@@ -110,6 +113,7 @@ async def test_plain_run_detaches_with_distinct_exit_when_input_is_required() ->
 
 
 class PlanBackend(PlainBackend):
+    @override
     async def stream(
         self, run_id: str, *, after_seq: int, developer: bool
     ) -> AsyncGenerator[TaskEvent, None]:

@@ -13,6 +13,7 @@ sequence cannot. Everything else refuses loudly.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
+from typing import ClassVar
 
 from orca.app.model import TaskEvent
 from orca.backend import (
@@ -27,8 +28,10 @@ from orca.backend import (
 
 
 class ScriptedBackend:
-    session = SessionInfo("local", "http://localhost", "1.6", "ws-1", "project", "/project")
-    accepted = RunInfo("run-1", "thread-1")
+    session: ClassVar[SessionInfo] = SessionInfo(
+        "local", "http://localhost", "1.6", "ws-1", "project", "/project"
+    )
+    accepted: ClassVar[RunInfo] = RunInfo("run-1", "thread-1")
 
     def events(self) -> Sequence[TaskEvent]:
         """The log `stream` replays, in order."""
