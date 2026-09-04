@@ -7,6 +7,7 @@ from typing import override
 from textual import events
 from textual.message import Message
 from textual.widgets import TextArea
+from textual.widgets.text_area import Edit, EditResult
 
 
 class Composer(TextArea):
@@ -119,11 +120,28 @@ class Composer(TextArea):
         self.replace_text(self.sent[target] if target < len(self.sent) else self._stash)
         return True
 
+    @override
+    def edit(self, edit: Edit) -> EditResult:
+        """Every change to the text comes through here, and the height follows it at
+        once. It used to follow from the `Changed` message, one message cycle later,
+        which laid the screen out twice for a new line -- once for the edit, once for the
+        height -- and the transcript above is laid out with it each time."""
+        result = super().edit(edit)
+        self.fit_height()
+        return result
+
     def replace_text(self, text: str) -> None:
-        """Put `text` in the composer with the cursor at its end."""
+        """Put `text` in the composer with the cursor at its end. A load is not an edit,
+        so the height is followed here as well: a send clears a draft of several lines
+        this way, and the box stayed tall until the next keystroke."""
         self.load_text(text)
         self.move_cursor(self.document.end)
+        self.fit_height()
 
     def fit_height(self) -> None:
         # As tall as the draft, to seven lines; the frame around it carries the border.
-        self.styles.height = min(7, max(1, self.text.count("\n") + 1))
+        # Set only when it changes: assigning a height lays the screen out again, and
+        # every keystroke used to.
+        lines = min(7, max(1, self.text.count("\n") + 1))
+        if self.styles.height is None or self.styles.height.value != lines:
+            self.styles.height = lines

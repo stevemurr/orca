@@ -336,6 +336,8 @@ class OrcaApp(App[None]):
         self._render_queued: bool = False
         #: What the shell around the transcript was last drawn from; see `_chrome_key`.
         self._chrome_shown: tuple[object, ...] | None = None
+        #: What the `/` menu was last drawn from: the rows and the highlighted one.
+        self._menu_shown: tuple[tuple[str, ...], int] | None = None
 
     @override
     def compose(self) -> ComposeResult:
@@ -447,14 +449,22 @@ class OrcaApp(App[None]):
         )
 
     def _render_menu(self) -> None:
-        menu = self.query_one("#command-menu", Static)
         commands = self._suggestions()
         self.query_one(Composer).menu_open = bool(commands)
+        if commands:
+            self._menu_index %= len(commands)
+        # Updating a Static lays the whole screen out again, sixty turns and all, and
+        # every keystroke came through here -- with the menu hidden and empty, and
+        # nothing to show for it. Drawn only when what it would show has changed.
+        shown = (tuple(row.insert for row in commands), self._menu_index)
+        if shown == self._menu_shown:
+            return
+        self._menu_shown = shown
+        menu = self.query_one("#command-menu", Static)
         if not commands:
             menu.set_class(False, "visible")
             menu.update("")
             return
-        self._menu_index %= len(commands)
         menu.set_class(True, "visible")
         menu.update(render_command_menu(commands, self._menu_index))
 
@@ -494,7 +504,6 @@ class OrcaApp(App[None]):
     @on(TextArea.Changed, "#composer")
     def composer_changed(self, message: TextArea.Changed) -> None:
         composer = cast(Composer, message.text_area)
-        composer.fit_height()
         self._reported_draft = composer.text
         if composer.text != self.model.composer_draft:
             self.apply_model_action(ComposerChanged(composer.text))

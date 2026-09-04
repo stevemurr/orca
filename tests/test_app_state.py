@@ -628,6 +628,35 @@ def test_a_rows_kind_is_read_from_the_backend_and_survives_an_upsert() -> None:
     assert state.turns[-1].progress[0].kind == "read"
 
 
+def test_a_summary_that_differs_only_in_whitespace_keeps_the_turn_in_order() -> None:
+    """The harness joins its messages with blank lines and strips each; the stream has
+    neither. The words are the same, so the tool calls stay where they happened rather
+    than being pushed above the whole answer."""
+    from orca.app.actions import EventReceived, RunAccepted
+    from orca.app.model import Activity, Narration
+
+    def ev(sequence: int, kind: str, payload: JsonObject) -> EventReceived:
+        return EventReceived(TaskEvent(sequence, f"e{sequence}", kind, "user", payload))
+
+    state = reduce(AppState(), RunAccepted("run-1", "thread-1")).state
+    state = reduce(state, ev(1, "run.created", {"message": "fix it"})).state
+    delta = {"effect_id": "e", "model_call_id": "m", "text": "Looking first. "}
+    state = reduce(state, ev(2, "answer.delta", delta)).state
+    state = reduce(state, ev(3, "run.progress", {"update_id": "r", "text": "read a.py"})).state
+    state = reduce(state, ev(4, "answer.delta", {**delta, "text": "Done. "})).state
+
+    same = reduce(state, ev(5, "run.completed", {"summary": "Looking first.\n\nDone."})).state
+    turn = same.turns[-1]
+    assert [type(s).__name__ for s in turn.timeline] == ["Narration", "Activity", "Narration"]
+    assert turn.answer == "Looking first.\n\nDone."
+
+    # A genuinely different summary still replaces the words, as the contract says.
+    other = reduce(state, ev(5, "run.completed", {"summary": "Something else."})).state
+    assert [type(s).__name__ for s in other.turns[-1].timeline] == ["Activity", "Narration"]
+    assert isinstance(other.turns[-1].timeline[0], Activity)
+    assert isinstance(other.turns[-1].timeline[-1], Narration)
+
+
 def test_an_activity_row_keeps_the_tool_and_what_it_was_pointed_at() -> None:
     from orca.app.actions import EventReceived
     from orca.app.model import TurnState

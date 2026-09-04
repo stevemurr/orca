@@ -766,8 +766,12 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             # The summary replaces what was streamed. When it is the streamed text -- which
             # is what the harness sends -- the turn keeps its shape, words and tool calls in
             # the order they happened; otherwise the narration is replaced by the summary.
+            # The same words are the same text: a backend joins its messages with blank
+            # lines and strips each, and a stream has neither, so the two differed by
+            # whitespace on every real run. That put every tool call above the whole
+            # answer at the end of a run, and on a long turn scrolled them out of sight.
             answer = summary
-            if summary != turn.provisional_answer:
+            if not _same_words(summary, turn.provisional_answer):
                 timeline = _without_narration(timeline)
                 if summary:
                     timeline = (*timeline, Narration(summary))
@@ -855,6 +859,11 @@ def _note(state: AppState, kind: TurnNoteKind, text: str) -> AppState:
     return _replace_latest_turn(
         state, replace(turn, notes=(*turn.notes, note), timeline=(*turn.timeline, note))
     )
+
+
+def _same_words(one: str, other: str) -> bool:
+    """Whether two texts differ only in whitespace."""
+    return one.split() == other.split()
 
 
 def _without_narration(timeline: tuple[Segment, ...]) -> tuple[Segment, ...]:

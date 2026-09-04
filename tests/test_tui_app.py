@@ -607,6 +607,26 @@ async def test_the_conversation_follows_new_output_unless_the_person_scrolled_up
         assert view.scroll_y == view.max_scroll_y
 
 
+async def test_the_composer_grows_with_a_draft_and_shrinks_back_after_a_send() -> None:
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        await pilot.press("o", "n", "e", "shift+enter", "t", "w", "o", "shift+enter", "3")
+        await pilot.pause()
+        assert composer.text == "one\ntwo\n3"
+        assert composer.size.height == 3
+
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert composer.text == ""
+        assert composer.size.height == 1
+
+
 async def test_the_composer_keeps_the_focus_after_a_send() -> None:
     """It is disabled while the send is in flight, and a disabled widget loses focus;
     the shell gives it back, so the next message can be typed at once."""
