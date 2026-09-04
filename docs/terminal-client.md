@@ -14,9 +14,11 @@ and makes durable run state legible without burying it.
 - `orca run "…"` is the non-interactive path. Plain output is stable for people; `--jsonl` emits a
   versioned machine-readable stream; `--no-follow` prints the accepted run id and detaches.
 
-Approval requests use a modal with explicit one-shot, persistent-when-offered, and reject choices.
-Questions stay inline above the composer. Plain mode exits with status 2 after reporting either
-kind of input request so an unattended process never appears to hang.
+Approval requests are asked inline at the end of the transcript, with explicit one-shot,
+persistent-when-offered, and reject choices; once decided, the prompt leaves the transcript and
+the decision is shown once as a notice by the composer. Questions stay inline above the composer.
+Plain mode exits with status 2 after reporting either kind of input request so an unattended
+process never appears to hang, 1 when the run failed, and 3 when it was cancelled or blocked.
 
 ## Architecture
 

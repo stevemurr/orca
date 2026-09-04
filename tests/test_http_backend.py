@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import override
 
+import httpx
 import pytest
 
 from orca.app.model import Choice
 from orca.backend import BackendError, CommandOutcome, Pause, RunRequest
-from orca.client import ApiError, SSEEvent
+from orca.client import ApiError, HttpApiClient, SSEEvent
 from orca.connection import Connection, CredentialSource
 from orca.http_backend import HttpBackend, normalize_event
 from orca.json_types import JsonObject
@@ -270,3 +271,103 @@ async def test_widening_before_the_first_message_makes_the_thread() -> None:
     assert again.thread_id == "thread-1"
     assert client.created_threads == [{"workspace_id": "ws-1", "title": ""}]
     assert client.folders == [("thread-1", "/srv/lib"), ("thread-1", "/srv/other")]
+
+
+def _over_the_wire(handler: Callable[[httpx.Request], httpx.Response]) -> HttpBackend:
+    """A backend on a real `HttpApiClient` whose transport is canned, for failures that only
+    exist below the `FakeClient` seam: the wire, and the framing."""
+    client = HttpApiClient("http://backend.test")
+    client._client = httpx.AsyncClient(  # pyright: ignore[reportPrivateUsage]
+        transport=httpx.MockTransport(handler)
+    )
+    return HttpBackend(
+        connection(),
+        client=client,
+        server_ensurer=no_server,
+        workspace_resolver=fixed_workspace,
+    )
+
+
+async def test_a_history_load_against_a_dead_port_is_a_backend_error() -> None:
+    """`load_thread` caught `ApiError` and nothing else, while the event read underneath
+    it raised raw httpx exceptions for a connection failure. (found 2026-09-04)"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/events"):
+            raise httpx.ConnectError("refused", request=request)
+        if path.endswith("/capabilities"):
+            return httpx.Response(200, json={"protocol_version": "1.6"})
+        if "/threads/" in path:
+            return httpx.Response(200, json={"thread_id": "t1", "workspace_id": "ws-1"})
+        if path.endswith("/runs"):
+            return httpx.Response(200, json={"runs": [{"run_id": "r1", "status": "completed"}]})
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    backend = _over_the_wire(handler)
+    _ = await backend.connect()
+
+    with pytest.raises(BackendError, match="server_unreachable"):
+        _ = await backend.load_thread("t1")
+    await backend.close()
+
+
+async def test_a_stream_frame_that_is_not_json_is_a_backend_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/capabilities"):
+            return httpx.Response(200, json={"protocol_version": "1.6"})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b"id: 1\nevent: run.progress\ndata: {not json\n\n",
+        )
+
+    backend = _over_the_wire(handler)
+    _ = await backend.connect()
+
+    with pytest.raises(BackendError, match="malformed_frame"):
+        async for _ in backend.stream("r1", after_seq=0, developer=False):
+            pass
+    await backend.close()
+
+
+async def test_a_run_reply_without_an_id_is_a_malformed_response() -> None:
+    """`created["run_id"]` sat on the return line, outside the boundary that wrapped the
+    thread id, so an empty reply leaked `KeyError('run_id')`. (found 2026-09-04)"""
+
+    class EmptyReplies(FakeClient):
+        @override
+        async def create_thread(
+            self, workspace_id: str | None = None, title: str = ""
+        ) -> JsonObject:
+            del workspace_id, title
+            return {}
+
+        @override
+        async def create_run(
+            self,
+            thread_id: str,
+            workspace_id: str | None,
+            message: str,
+            *,
+            mode: str | None = None,
+            approval_policy: str | None = None,
+            client_context: JsonObject | None = None,
+            idempotency_key: str | None = None,
+        ) -> JsonObject:
+            del thread_id, workspace_id, message, mode, approval_policy
+            del client_context, idempotency_key
+            return {}
+
+    backend = HttpBackend(
+        connection(),
+        client=EmptyReplies(),
+        server_ensurer=no_server,
+        workspace_resolver=fixed_workspace,
+    )
+    _ = await backend.connect()
+
+    with pytest.raises(BackendError, match="malformed_response.*thread_id"):
+        _ = await backend.start_run(RunRequest("Build it", None, "ws-1", "normal", "ask"))
+    with pytest.raises(BackendError, match="malformed_response.*run_id"):
+        _ = await backend.start_run(RunRequest("Build it", "thread-1", "ws-1", "normal", "ask"))

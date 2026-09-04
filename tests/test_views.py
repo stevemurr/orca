@@ -590,7 +590,7 @@ def test_an_approval_is_asked_at_the_end_of_its_turn_and_leaves_once_decided() -
     asked = plain(render_conversation(state, width=90), width=90)
     assert asked.index("Building the terminal shell") < asked.index("Run the tests?")
     assert "$ pytest -q" in asked
-    assert "Approve once" in asked and "Always allow" in asked and "Reject" in asked
+    assert "Approve once" in asked and "Always approve bash" in asked and "Reject" in asked
 
     decided = replace(state, interaction=None, run_status=RunStatus.RUNNING)
     rendered = plain(render_conversation(decided, width=90), width=90)
@@ -658,3 +658,123 @@ def test_the_agents_view_and_strip_show_a_delegated_agent() -> None:
     assert "WebSearch xctest hang" in strip
     assert "agent_1" in view and "running" in view and "Let me search for that." in view
     assert "xctest hang" in view
+
+
+def test_an_approval_names_its_risk_in_the_warning_colour() -> None:
+    """The backend says how much a call could do; the line was parsed and never drawn."""
+    from orca.app.model import InteractionState
+    from orca.tui.render.theme import WARNING
+
+    state = replace(
+        populated_state(),
+        run_status=RunStatus.AWAITING_APPROVAL,
+        interaction=InteractionState(
+            kind="approval",
+            request_id="a1",
+            title="Run the tests?",
+            command="rm -rf build",
+            risk="high",
+            allowed_decisions=("approve", "reject"),
+        ),
+    )
+    rendered = render_interaction(state, width=90)
+    assert rendered is not None
+    text = plain(rendered, width=90)
+    assert "risk: high" in text
+    assert text.index("risk: high") < text.index("Approve once")
+    segments = Console(force_terminal=True, color_system="truecolor", width=90).render(rendered)
+    risk = next(segment for segment in segments if segment.text == "high")
+    assert risk.style is not None and risk.style.color == Color.parse(WARNING)
+
+
+def test_the_approval_choices_are_the_backends_own_decisions_in_its_order() -> None:
+    from orca.app.model import InteractionState
+    from orca.tui.render.chrome import approval_keys, decision_label
+
+    assert approval_keys(()) == {
+        "1": "approve",
+        "2": "reject",
+        "y": "approve",
+        "enter": "approve",
+        "n": "reject",
+        "escape": "reject",
+    }
+    assert approval_keys(("deny", "allow"))["1"] == "deny"
+    assert approval_keys(("deny", "allow"))["y"] == "allow"
+    assert decision_label("approve_bash_always") == "Always approve bash"
+    assert decision_label("approve_bash_always", "git commands") == "Always allow git commands"
+    assert decision_label("allow_always") == "Always allow"
+    assert decision_label("skip_this_time") == "Skip this time"
+
+    state = replace(
+        populated_state(),
+        run_status=RunStatus.AWAITING_APPROVAL,
+        interaction=InteractionState(
+            kind="approval",
+            request_id="a1",
+            title="Run the tests?",
+            allowed_decisions=("allow", "allow_always", "deny"),
+            grant="shell commands",
+        ),
+    )
+    rendered = render_interaction(state, width=90)
+    assert rendered is not None
+    lines = [line.strip() for line in plain(rendered, width=90).splitlines()]
+    assert any(line.startswith("│ 1  Allow") and line.rstrip("│ ").endswith("enter") for line in lines)
+    assert any("2  Always allow shell commands" in line for line in lines)
+    assert any(line.startswith("│ 3  Deny") and line.rstrip("│ ").endswith("esc") for line in lines)
+    assert "Approve once" not in "\n".join(lines)
+
+
+def test_a_question_with_many_options_numbers_every_one() -> None:
+    from orca.app.model import InteractionState
+
+    state = replace(
+        populated_state(),
+        interaction=InteractionState(
+            kind="question",
+            request_id="q1",
+            title="Pick one",
+            options=tuple(f"option {index}" for index in range(1, 13)),
+        ),
+    )
+    rendered = render_interaction(state, width=60)
+    assert rendered is not None
+    text = plain(rendered, width=60)
+    assert "10  option 10" in text and "12  option 12" in text
+    assert "…" not in text
+
+
+def test_a_long_pinned_plan_is_a_window_around_the_current_step() -> None:
+    """The strip above the composer is a few rows; a plan of fifteen steps used to fill
+    it with the first seven, all done, and the step the model was on was nowhere."""
+    steps = (
+        *(PlanStep(f"step {index}", "completed") for index in range(1, 13)),
+        PlanStep("step 13, the current one", "in_progress"),
+        *(PlanStep(f"step {index}", "pending") for index in range(14, 21)),
+    )
+    state = replace(populated_state(), turns=(replace(populated_state().turns[0], plan=steps),))
+
+    pinned = render_plan(state, width=90)
+    assert pinned is not None
+    strip = plain(pinned, width=90)
+    lines = [line for line in strip.splitlines() if line.strip()]
+
+    assert "Plan · step 13 of 20" in lines[0]
+    assert "▸  step 13, the current one" in strip
+    assert "… 10 more above" in strip and "… 5 more below" in strip
+    assert "step 10" not in strip and "step 16" not in strip
+    assert len(lines) <= 8
+
+    # A short plan is shown whole, with its explanation on the title line.
+    short = _planned()
+    whole = plain(render_plan(short, width=90), width=90)
+    assert "step 2 of 3" in whole and "the old handler was already gone" in whole
+    assert "more" not in whole
+
+    # A plan wholly done says so, and shows its last steps.
+    done = replace(
+        state, turns=(replace(state.turns[0], plan=tuple(replace(s, status="completed") for s in steps)),)
+    )
+    finished = plain(render_plan(done, width=90), width=90)
+    assert "20 of 20 done" in finished and "step 20" in finished

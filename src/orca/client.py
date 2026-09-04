@@ -72,6 +72,17 @@ class ApiError(RuntimeError):
         super().__init__(f"{prefix}{code}: {message}")
 
 
+class MalformedEventError(ApiError):
+    """A frame on the event stream that the contract does not allow.
+
+    A subclass so an adapter can still catch `ApiError` alone, and a name so a test can say
+    exactly which failure it is pinning.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(0, "malformed_frame", message)
+
+
 def _error_for(resp: httpx.Response) -> ApiError:
     """Turn any error response into an `ApiError`, including ones this server did not author.
 
@@ -130,7 +141,16 @@ class HttpApiClient:
         self._origin: str = base_url.rstrip("/")
         self._base: str = self._origin + API_PREFIX
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        self._client: httpx.AsyncClient = httpx.AsyncClient(headers=headers, timeout=timeout)
+        # `trust_env=False`: httpx honours `HTTP_PROXY`/`ALL_PROXY` by default, and for a plain
+        # http:// endpoint that means every request -- bearer token included -- goes to the
+        # proxy in the clear, even for 127.0.0.1, which the proxy has no business seeing. The
+        # health probe in `server_manager` already ignores the environment for the same reason;
+        # the client that carries the credential must not be the one that forwards it. A
+        # deployment that genuinely sits behind a proxy is a configuration this client does not
+        # have yet, and adding it would still have to exclude the loopback. (found 2026-09-04)
+        self._client: httpx.AsyncClient = httpx.AsyncClient(
+            headers=headers, timeout=timeout, trust_env=False
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -154,21 +174,25 @@ class HttpApiClient:
             resp = await self._client.request(
                 method, f"{self._base}{path}", json=json, params=params, headers=headers
             )
-        except httpx.TimeoutException as exc:
-            raise ApiError(
-                0,
-                "server_timeout",
-                f"The backend at {self._origin} did not respond in time.",
-            ) from exc
         except httpx.RequestError as exc:
-            raise ApiError(
-                0,
-                "server_unreachable",
-                f"Could not connect to the backend at {self._origin}.",
-            ) from exc
+            raise self._transport_error(exc) from exc
         if resp.status_code >= 400:
             raise _error_for(resp)
         return resp
+
+    def _transport_error(self, exc: httpx.RequestError) -> ApiError:
+        """A request that never got a response, as the one error type callers catch."""
+        if isinstance(exc, httpx.TimeoutException):
+            return ApiError(
+                0,
+                "server_timeout",
+                f"The backend at {self._origin} did not respond in time.",
+            )
+        return ApiError(
+            0,
+            "server_unreachable",
+            f"Could not connect to the backend at {self._origin}.",
+        )
 
     async def _object(
         self,
@@ -328,20 +352,26 @@ class HttpApiClient:
         """
         events: list[SSEEvent] = []
         parser = SSEParser()
-        async with self._client.stream(
-            "GET",
-            f"{self._base}/runs/{run_id}/events",
-            params={"after_seq": 0, "visibility": visibility, "ticks": ticks},
-            headers={"Accept": "text/event-stream"},
-            timeout=httpx.Timeout(30.0, read=None),
-        ) as resp:
-            if resp.status_code >= 400:
-                # The body has not been read yet on a streamed response, and `_error_for`
-                # needs it to find the server's `{code, message}`.
-                await resp.aread()
-                raise _error_for(resp)
-            async for line in resp.aiter_lines():
-                events.extend(parser.feed(line))
+        # Streamed requests do not go through `_send`, so the transport failures it turns
+        # into `ApiError` were escaping here as raw httpx exceptions and crashing a history
+        # load that a dead port should have reported. (found 2026-09-04)
+        try:
+            async with self._client.stream(
+                "GET",
+                f"{self._base}/runs/{run_id}/events",
+                params={"after_seq": 0, "visibility": visibility, "ticks": ticks},
+                headers={"Accept": "text/event-stream"},
+                timeout=httpx.Timeout(30.0, read=None),
+            ) as resp:
+                if resp.status_code >= 400:
+                    # The body has not been read yet on a streamed response, and `_error_for`
+                    # needs it to find the server's `{code, message}`.
+                    await resp.aread()
+                    raise _error_for(resp)
+                async for line in resp.aiter_lines():
+                    events.extend(parser.feed(line))
+        except httpx.RequestError as exc:
+            raise self._transport_error(exc) from exc
         return events
 
     async def stream_events(
@@ -393,6 +423,11 @@ class HttpApiClient:
                             yield event
             except (httpx.TransportError, httpx.ReadTimeout):
                 pass  # reconnect from the cursor; `after_seq` makes that lossless
+            except httpx.RequestError as exc:
+                # Anything else httpx raises before a response -- a malformed URL, a decoding
+                # failure -- is not something a reconnect fixes, and it must still reach the
+                # caller as an `ApiError` rather than a library exception. (found 2026-09-04)
+                raise self._transport_error(exc) from exc
             if finished:
                 return
             # A connection that carried events was a healthy one, whatever ended it: the
@@ -443,9 +478,16 @@ class SSEParser:
         if line == "":
             if not self._data:
                 return []
-            decoded = cast(JsonValue, orjson.loads("\n".join(self._data)))
+            raw = "\n".join(self._data)
+            try:
+                decoded = cast(JsonValue, orjson.loads(raw))
+            except orjson.JSONDecodeError as exc:
+                # A backend that writes a broken frame is a backend problem, and it has to be
+                # reported as one: the bare decode error escaped past every `except ApiError`
+                # in the adapter and took the whole session down. (found 2026-09-04)
+                raise MalformedEventError("an event frame's data is not JSON") from exc
             if not isinstance(decoded, Mapping):
-                raise ApiError(0, "malformed_frame", "an event frame's data is not a JSON object")
+                raise MalformedEventError("an event frame's data is not a JSON object")
             event = SSEEvent(id=self._id, event=self._event, data=decoded)
             self._id, self._event, self._data = None, "message", []
             return [event]

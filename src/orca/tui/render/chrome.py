@@ -88,6 +88,11 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
     if interaction.command:
         rows.append(Text(""))
         rows.append(Text.assemble(("$ ", MUTED), (interaction.command, "bold"), overflow="fold"))
+    if interaction.risk:
+        # The backend's own word for how much this could do -- `high`, say -- in the
+        # warning colour, above the choices: it is the one line that should change which
+        # key a person reaches for.
+        rows.append(Text.assemble(("risk: ", MUTED), (interaction.risk, f"bold {WARNING}")))
     for snippet in interaction.snippets:
         rows.append(Text(snippet.title, style=f"bold {MUTED}"))
         rows.append(code_block(snippet, lines=_APPROVAL_LINES, width=max(1, width - 4)))
@@ -121,26 +126,80 @@ def render_interaction(state: AppState, *, width: int) -> RenderableType | None:
     )
 
 
+#: The decisions orca can put a word to. Any other name a backend offers is shown as
+#: itself, underscores for spaces, so a vocabulary orca has never seen still has a key.
+_DECISION_LABELS = {
+    "approve": "Approve once",
+    "approve_bash_always": "Always approve bash",
+    "reject": "Reject",
+    "allow": "Allow",
+    "allow_always": "Always allow",
+    "deny": "Deny",
+}
+#: Which of the backend's words mean yes and which mean no, so `y`, `n`, Enter and Esc
+#: can find their decision whatever the vocabulary; and which are standing grants.
+_AFFIRMATIVE = ("approve", "allow")
+_NEGATIVE = ("reject", "deny")
+_STANDING = ("approve_bash_always", "allow_always")
+#: What is offered when a backend names no decisions at all: the pair every backend
+#: orca has met understands.
+_LEGACY_DECISIONS = ("approve", "reject")
+#: Digits are the keys; a tenth decision would have none, and none has ever had that many.
+_MAX_KEYED = 9
+
+
+def approval_keys(allowed: tuple[str, ...]) -> dict[str, str]:
+    """Key to decision for an approval: the digit `n` sends the nth decision the backend
+    offered, in the backend's order, so a vocabulary orca does not know still gets keys
+    that send something it will accept. `y` and Enter are the first yes, `n` and Esc the
+    first no, when the backend offers one of each by a name orca knows; a vocabulary with
+    neither has only its digits."""
+    decisions = allowed or _LEGACY_DECISIONS
+    keys = {str(index): decision for index, decision in enumerate(decisions[:_MAX_KEYED], 1)}
+    yes = next((decision for decision in decisions if decision in _AFFIRMATIVE), None)
+    no = next((decision for decision in decisions if decision in _NEGATIVE), None)
+    if yes is not None:
+        keys["y"] = yes
+        keys["enter"] = yes
+    if no is not None:
+        keys["n"] = no
+        keys["escape"] = no
+    return keys
+
+
+def decision_label(decision: str, grant: str = "") -> str:
+    """The decision as a person would read it. A standing grant names what it would
+    cover, when the backend said, because a choice whose scope is unstated is read as the
+    narrowest or the widest thing it could be, and is wrong either way."""
+    if grant and decision in _STANDING:
+        return f"Always allow {grant}"
+    return _DECISION_LABELS.get(decision) or decision.replace("_", " ").capitalize()
+
+
 def _approval_choices(allowed: tuple[str, ...], grant: str) -> RenderableType:
     """The decisions, one to a row, the key that makes each beside it -- the way an
     editor's agent lays out a permission prompt, so the choice is read before the key.
-    The standing grant names what it would cover, when the backend said, because a
-    choice whose scope is unstated is read as the narrowest or the widest thing it could
-    be, and is wrong either way."""
+    Enter and Esc are named beside the rows they stand for."""
+    keys = approval_keys(allowed)
+    digits = [(key, decision) for key, decision in keys.items() if key.isdigit()]
     choices = Table.grid(padding=(0, 2))
     choices.add_column(width=1, no_wrap=True, style=f"bold {ACCENT}")
     choices.add_column(no_wrap=True)
     choices.add_column(style=MUTED, no_wrap=True)
-    choices.add_row("1", "Approve once", "enter")
-    if "approve_bash_always" in allowed:
-        choices.add_row("2", f"Always allow {grant}" if grant else "Always allow this", "")
-    choices.add_row("3", "Reject", "esc")
+    for key, decision in digits:
+        hint = ""
+        if keys.get("enter") == decision:
+            hint = "enter"
+        elif keys.get("escape") == decision:
+            hint = "esc"
+        choices.add_row(key, decision_label(decision, grant), hint)
     return choices
 
 
 def _numbered(options: tuple[str, ...]) -> RenderableType:
     rows = Table.grid(padding=(0, 2))
-    rows.add_column(width=1, no_wrap=True, style=f"bold {ACCENT}")
+    # As wide as the last number: a fixed single cell showed a tenth option as `…`.
+    rows.add_column(width=len(str(len(options))), no_wrap=True, style=f"bold {ACCENT}")
     rows.add_column(ratio=1, overflow="fold")
     for index, option in enumerate(options, start=1):
         rows.add_row(str(index), option)
@@ -184,17 +243,14 @@ def render_command_menu(rows: tuple[Suggestion, ...], selected: int) -> Renderab
     return table
 
 
-#: How long a notice stays, by how much it matters. An error waits to be read; a decision
-#: that was just made needs only a glance.
-_NOTICE_SECONDS = {"info": 3.0, "warning": 6.0, "error": 10.0}
-
-
 def render_notice(state: AppState) -> Text | None:
-    """The latest notice still within its time, for the line above the composer."""
+    """The latest notice still within its time, for the line above the composer. The
+    notice knows its own time -- the reducer prunes by the same rule -- so this never
+    shows one the model has dropped, or hides one it still keeps."""
     if not state.notices:
         return None
     notice = state.notices[-1]
-    if state.clock - notice.shown_at >= _NOTICE_SECONDS[notice.level]:
+    if notice.expired(state.clock):
         return None
     style = {"info": MUTED, "warning": WARNING, "error": ERROR}[notice.level]
     mark = {"info": "·", "warning": "!", "error": "✗"}[notice.level]

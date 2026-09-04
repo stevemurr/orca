@@ -5,21 +5,25 @@ from __future__ import annotations
 from dataclasses import replace
 
 from orca.app.actions import (
+    ApprovalDecided,
     Back,
     ClockTicked,
     CommandCompleted,
     CommandInvoked,
     ComposerSubmitted,
     Connected,
+    ConnectFailed,
     EventReceived,
     FolderAdded,
     Navigate,
+    OperationFailed,
     RunAccepted,
     ThreadLoaded,
     ThreadSelected,
 )
 from orca.app.commands import ParsedCommand, parse_input
 from orca.app.model import (
+    NOTICE_SECONDS,
     Activity,
     AppState,
     Choice,
@@ -32,8 +36,16 @@ from orca.app.model import (
     Usage,
     ViewId,
 )
-from orca.app.update import AddFolder, FollowRun, LoadThread, SendRunCommand, reduce
-from orca.backend import Answer, CommandOutcome
+from orca.app.update import (
+    AddFolder,
+    FollowRun,
+    LoadThread,
+    SendRunCommand,
+    StartRun,
+    SwitchWorkspace,
+    reduce,
+)
+from orca.backend import Answer, Cancel, CommandOutcome
 from orca.json_types import JsonObject
 
 
@@ -319,7 +331,7 @@ def test_a_resumed_run_stops_reading_as_paused() -> None:
     and not leave. (2026-08-30)
     """
     state = feed(
-        AppState(),
+        reduce(AppState(), RunAccepted("run-1", "thread-1")).state,
         event(1, "run.created", {"message": "do it"}),
         event(2, "run.paused", {}),
     )
@@ -892,3 +904,267 @@ def test_an_agents_row_before_its_start_event_is_kept() -> None:
     (agent,) = state.turns[-1].agents
     assert agent.status == "failed" and [r.update_id for r in agent.progress] == ["c1"]
     assert state.turns[-1].notes[-1].text == "agent_9 failed: RuntimeError: boom"
+
+
+def _connected(workspace_id: str = "ws-1", *, reset: bool = False) -> Connected:
+    return Connected(
+        profile="local",
+        endpoint="http://127.0.0.1:8420",
+        protocol_version="1.6",
+        workspace_id=workspace_id,
+        workspace_name=workspace_id,
+        workspace_path=f"/{workspace_id}",
+        reset_conversation=reset,
+    )
+
+
+def test_a_message_in_flight_holds_the_conversation_and_a_reset_orphans_it() -> None:
+    """A workspace switch used to go through while the first message was still being sent,
+    and the run it started was then spliced into the new workspace's conversation."""
+    sent = reduce(reduce(AppState(), _connected()).state, ComposerSubmitted("hello"))
+    assert sent.effects == (StartRun("hello"),) and sent.state.submitting
+
+    held = reduce(sent.state, CommandInvoked("workspace", "/other"))
+    assert held.effects == ()
+    assert held.state.notices[-1].message.startswith("Wait for the message to be sent")
+    assert reduce(sent.state, CommandInvoked("new", "")).effects == ()
+    assert reduce(sent.state, CommandInvoked("threads", "")).effects == ()
+    # A second message while the first is on its way is held too, and its draft kept.
+    again = reduce(sent.state, ComposerSubmitted("and this"))
+    assert again.effects == () and again.state.composer_draft == sent.state.composer_draft
+
+    # Once the run is going, it is not in flight: the workspace is held by the run instead.
+    accepted = reduce(sent.state, RunAccepted("run-1", "thread-1", 5.0)).state
+    assert reduce(accepted, CommandInvoked("workspace", "/other")).state.notices[
+        -1
+    ].message == "Finish or /cancel the active run before switching workspaces."
+    assert reduce(reduce(AppState(), _connected()).state, CommandInvoked("workspace", "/o")).effects == (SwitchWorkspace("/o"),)
+
+    # The switch that went through anyway -- a reconnect, say -- orphans the request.
+    switched = reduce(sent.state, _connected("ws-2", reset=True)).state
+    assert not switched.submitting and switched.orphaned_submission
+    late = reduce(switched, RunAccepted("run-1", "thread-A", 10.0)).state
+    assert late.active_run_id is None and late.turns == () and late.thread_id is None
+    assert not late.orphaned_submission
+    assert "was left" in late.notices[-1].message
+    # Its stream, followed by the host regardless, builds no turn with no run id.
+    streamed = feed(late, event(1, "run.created", {"message": "hello"}))
+    assert streamed.turns == () and streamed.run_status is RunStatus.IDLE
+    # A conversation that was not mid-message accepts the next run as ever.
+    fresh = reduce(reduce(AppState(), _connected()).state, _connected("ws-2", reset=True)).state
+    assert reduce(fresh, RunAccepted("run-2", "thread-B")).state.active_run_id == "run-2"
+
+
+def test_the_first_add_and_the_first_message_do_not_make_two_threads() -> None:
+    """Before the first message, `/add` makes the thread. A message sent meanwhile made
+    another, and whichever answered last took the conversation over."""
+    fresh = reduce(AppState(), _connected()).state
+
+    adding = reduce(fresh, CommandInvoked("add", "/srv/lib"))
+    assert adding.effects == (AddFolder(None, "/srv/lib"),) and adding.state.adding_folder
+    held = reduce(adding.state, ComposerSubmitted("first message"))
+    assert held.effects == () and held.state.composer_draft == adding.state.composer_draft
+    assert held.state.notices[-1].message.startswith("Wait for the folder")
+    assert reduce(adding.state, CommandInvoked("add", "/srv/other")).effects == ()
+
+    settled = reduce(adding.state, FolderAdded("thread-9", ("/srv/lib",))).state
+    assert not settled.adding_folder and settled.thread_id == "thread-9"
+    assert reduce(settled, ComposerSubmitted("first message")).effects == (
+        StartRun("first message"),
+    )
+    # An add that failed frees the composer too.
+    assert not reduce(adding.state, OperationFailed("no route")).state.adding_folder
+
+    # The other way round: a message in flight holds the add.
+    sent = reduce(fresh, ComposerSubmitted("first message")).state
+    assert reduce(sent, CommandInvoked("add", "/srv/lib")).effects == ()
+    # A folder added to some other thread does not take this conversation over.
+    running = reduce(sent, RunAccepted("run-1", "thread-RUN")).state
+    crossed = reduce(running, FolderAdded("thread-FOLDER", ("/srv/lib",))).state
+    assert crossed.thread_id == "thread-RUN" and crossed.folders == ()
+    assert crossed.notices[-1].level == "warning"
+    # Once the conversation has a thread, an add while a run is going is still allowed.
+    assert reduce(running, CommandInvoked("add", "/srv/lib")).effects == (
+        AddFolder("thread-RUN", "/srv/lib"),
+    )
+
+
+def test_a_notice_made_before_the_clock_lives_a_full_turn_and_is_pruned_after() -> None:
+    """A notice was stamped with the clock as it stood, zero before the first tick, so the
+    first real tick found it long expired; and an expired notice was never dropped, so the
+    tick that watched for it never stopped."""
+    failed = reduce(AppState(), ConnectFailed("cannot connect")).state
+    assert failed.notices[-1].shown_at == 0 and failed.live_notices == failed.notices
+
+    first = reduce(failed, ClockTicked(12345.0)).state
+    assert first.notices[-1].shown_at == 12345.0 and first.live_notices == first.notices
+    soon = reduce(first, ClockTicked(12345.0 + NOTICE_SECONDS["error"] - 0.5)).state
+    assert soon.notices == first.notices
+    gone = reduce(soon, ClockTicked(12345.0 + NOTICE_SECONDS["error"])).state
+    assert gone.notices == () and gone.clock == 12345.0 + NOTICE_SECONDS["error"]
+
+    # Each level has its own time, and a state that has a clock stamps with it.
+    told = reduce(replace(gone, clock=100.0), CommandInvoked("status", "")).state
+    assert told.notices[-1].shown_at == 100.0
+    assert reduce(told, ClockTicked(100.0 + NOTICE_SECONDS["info"])).state.notices == ()
+    assert replace(told, clock=101.0).live_notices == told.notices
+
+
+def test_while_a_question_is_pending_everything_but_cancel_is_the_answer() -> None:
+    """`/cancel` typed as an answer used to cancel the run, and `/new` to start over."""
+    asked = feed(
+        _running(),
+        event(2, "question.requested", {"question_id": "q1", "prompt": "Which command?"}),
+    )
+    for text in ("/new", "/workspace /x", "/threads", "/help", "/etc/passwd"):
+        answered = reduce(asked, ComposerSubmitted(text))
+        assert answered.effects == (SendRunCommand("run-1", Answer("q1", text)),), text
+        assert answered.state.notices == ()
+    cancelled = reduce(asked, ComposerSubmitted("/cancel"))
+    assert cancelled.effects == (SendRunCommand("run-1", Cancel()),)
+
+
+def test_a_question_is_answered_once_until_the_backend_resolves_it() -> None:
+    asked = feed(
+        _running(),
+        event(2, "question.requested", {"question_id": "q1", "options": ["a", "b"]}),
+    )
+    sent = reduce(asked, ComposerSubmitted("1"))
+    assert sent.effects and sent.state.interaction is not None
+    assert sent.state.interaction.sending
+    assert reduce(sent.state, ComposerSubmitted("2")).effects == ()
+    # A send that failed asks again.
+    retry = reduce(sent.state, OperationFailed("no route")).state
+    assert retry.interaction is not None and not retry.interaction.sending
+    assert reduce(retry, ComposerSubmitted("2")).effects == (
+        SendRunCommand("run-1", Answer("q1", "b")),
+    )
+    resolved = feed(sent.state, event(3, "question.resolved", {"question_id": "q1"}))
+    assert resolved.interaction is None
+
+
+def test_an_agent_with_a_blank_task_or_answer_is_still_told() -> None:
+    """`_one_line` took the first line of the text; blank text has none, and it raised."""
+    started = feed(_running(), event(2, "agent.started", {"agent_id": "a1", "task": " \n "}))
+    assert started.turns[-1].notes[-1].text == "a1 started: (no task)"
+    assert feed(_running(), event(2, "agent.started", {"agent_id": "a1"})).turns[-1].notes
+    finished = feed(
+        started, event(3, "agent.finished", {"agent_id": "a1", "answer": "\n", "turns": 2})
+    )
+    assert finished.turns[-1].notes[-1].text == "a1 finished after 2 turns"
+    assert (
+        feed(started, event(3, "agent.finished", {"agent_id": "a1", "answer": " ok \nmore"}))
+        .turns[-1]
+        .notes[-1]
+        .text.endswith(": ok")
+    )
+
+
+def test_a_wire_array_may_be_a_tuple() -> None:
+    """`JsonValue` types an array as a `Sequence`; the reducer asked for a `list` and dropped
+    a tuple-backed plan, option list, argv and decision list on the floor."""
+    state = feed(
+        _running(),
+        event(2, "plan.progress", {"plan": ({"step": "read", "status": "done"},)}),
+        event(
+            3,
+            "approval.requested",
+            {
+                "approval_id": "a1",
+                "allowed_decisions": ("approve", "reject"),
+                "arguments": {"argv": ("ls", "-la")},
+            },
+        ),
+    )
+    assert [step.step for step in state.turns[-1].plan] == ["read"]
+    assert state.interaction is not None
+    assert state.interaction.allowed_decisions == ("approve", "reject")
+    assert state.interaction.command == "ls -la"
+    asked = feed(
+        state,
+        event(4, "approval.resolved", {"decision": "approve"}),
+        event(5, "question.requested", {"question_id": "q1", "options": ("a", "b")}),
+    )
+    assert asked.interaction is not None and asked.interaction.options == ("a", "b")
+    # A string is a sequence too, and is not an array.
+    plain = feed(_running(), event(2, "question.requested", {"question_id": "q", "options": "ab"}))
+    assert plain.interaction is not None and plain.interaction.options == ()
+
+
+def test_a_digit_int_does_not_read_is_an_answer_not_a_pick() -> None:
+    asked = feed(
+        _running(),
+        event(2, "question.requested", {"question_id": "q1", "options": ["a", "b", "c"]}),
+    )
+    for text in ("²", "①", "1.0"):
+        assert reduce(asked, ComposerSubmitted(text)).effects == (
+            SendRunCommand("run-1", Answer("q1", text)),
+        ), text
+    assert reduce(asked, ComposerSubmitted("２")).effects == (
+        SendRunCommand("run-1", Answer("q1", "b")),
+    )
+
+
+def test_new_starts_from_the_same_slate_a_loaded_thread_does() -> None:
+    """`/new` cleared the transcript and kept the last run's status, cursor, clock and
+    notices, so the new conversation opened saying "failed" over an empty page."""
+    ended = feed(
+        reduce(AppState(), RunAccepted("run-1", "thread-1", 100.0)).state,
+        event(1, "run.created", {"message": "hi"}),
+        event(2, "run.failed", {"summary": "boom"}),
+    )
+    told = reduce(replace(ended, clock=150.0), CommandInvoked("status", "")).state
+    assert told.run_status is RunStatus.FAILED and told.cursor == 2 and told.notices
+
+    fresh = reduce(told, CommandInvoked("new", "")).state
+    assert fresh.run_status is RunStatus.IDLE
+    assert (fresh.cursor, fresh.run_started_at, fresh.interaction) == (0, 0.0, None)
+    assert fresh.notices == () and fresh.turns == () and fresh.thread_id is None
+    assert fresh.clock == 150.0
+
+
+def test_leaving_a_paused_run_says_what_would_actually_free_it() -> None:
+    """Pausing keeps the run active, so "pause or finish" asked for something that could
+    not free the conversation, and there is no detaching from a run either."""
+    paused = feed(_running(), event(2, "run.paused", {}))
+    assert paused.active_run_id == "run-1"
+    for name, doing in (
+        ("threads", "switching conversations"),
+        ("new", "starting a new conversation"),
+    ):
+        held = reduce(paused, CommandInvoked(name, ""))
+        assert held.effects == ()
+        assert held.state.notices[-1].message == f"Finish or /cancel the active run before {doing}."
+    workspace = reduce(paused, CommandInvoked("workspace", "/x")).state
+    assert workspace.notices[-1].message.startswith("Finish or /cancel")
+
+
+def test_a_decision_in_either_vocabulary_is_said_as_prose() -> None:
+    """The keys send `approve`, `reject` and `approve_bash_always`; the label table knew
+    `allow` and `deny`, so the notice said `approve_bash_always: run: pytest`."""
+    asked = feed(
+        _running(),
+        event(
+            2,
+            "approval.requested",
+            {"approval_id": "a1", "title": "run: pytest", "allowed_decisions": ["approve"]},
+        ),
+    )
+    assert asked.interaction is not None and asked.interaction.risk == ""
+    for decision, said in (
+        ("approve", "Approved"),
+        ("allow", "Approved"),
+        ("approve_bash_always", "Approved, and always from now on"),
+        ("allow_always", "Approved, and always from now on"),
+        ("reject", "Rejected"),
+        ("deny", "Rejected"),
+        ("approve_reads_always", "Approve reads always"),
+        ("", "Decided"),
+    ):
+        sent = reduce(asked, ApprovalDecided("approve")).state
+        decided = feed(sent, event(3, "approval.resolved", {"decision": decision}))
+        assert decided.notices[-1].message == f"{said}: run: pytest", decision
+    risky = feed(
+        _running(), event(2, "approval.requested", {"approval_id": "a2", "risk": "high"})
+    )
+    assert risky.interaction is not None and risky.interaction.risk == "high"

@@ -155,7 +155,9 @@ def _display_timestamp(value: str) -> str:
         return ""
     try:
         parsed = datetime.fromisoformat(value).astimezone()
-    except ValueError:
-        return value
+    except (ValueError, OverflowError, OSError):
+        # Not a date, or one so far out that the local zone cannot be applied to it. The
+        # row does without a time rather than showing the raw string as one.
+        return ""
     clock = parsed.strftime("%I:%M %p").lstrip("0")
     return f"{parsed:%b} {parsed.day}, {clock}"

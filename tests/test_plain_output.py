@@ -155,3 +155,163 @@ async def test_plain_run_announces_a_step_when_it_starts_and_only_then() -> None
 
     assert code == 0
     assert output.getvalue() == ("▸ read the router\n▸ add the handler\nAdded the handler.\n")
+
+
+class StoppedBackend(PlainBackend):
+    """A run that narrates, streams half an answer, and then stops for a reason."""
+
+    def __init__(self, kind: str, *, with_answer: bool = True) -> None:
+        self.kind: str = kind
+        self.with_answer: bool = with_answer
+
+    @override
+    def events(self) -> Sequence[TaskEvent]:
+        streamed = (
+            (
+                TaskEvent(
+                    3,
+                    "evt-3",
+                    "answer.delta",
+                    "user",
+                    {"effect_id": "a", "model_call_id": "b", "text": "Half an answer"},
+                ),
+            )
+            if self.with_answer
+            else ()
+        )
+        return (
+            TaskEvent(1, "evt-1", "run.created", "user", {"message": "Build it"}),
+            TaskEvent(
+                2,
+                "evt-2",
+                "run.progress",
+                "user",
+                {"update_id": "work:one", "status": "active", "text": "Building it."},
+            ),
+            *streamed,
+            TaskEvent(4, "evt-4", self.kind, "user", {"summary": "The sandbox went away."}),
+        )
+
+
+async def test_plain_run_keeps_the_partial_answer_and_says_why_it_stopped() -> None:
+    """A stopped run used to exit 0 and, once any answer had streamed, drop the status word.
+
+    The words stay on stdout; the status and its reason go to stderr; the exit code tells a
+    script which way the run ended without parsing either.
+    """
+
+    for kind, code in (("run.failed", 1), ("run.cancelled", 3), ("run.blocked", 3)):
+        output, errors = StringIO(), StringIO()
+        status = await run_once(
+            StoppedBackend(kind),
+            RunRequest("Build it", None, "", "normal", "ask"),
+            stdout=output,
+            stderr=errors,
+        )
+
+        assert status == code, kind
+        assert output.getvalue() == "· Building it.\n\nHalf an answer\n", kind
+        assert errors.getvalue() == f"{kind.removeprefix('run.')}: The sandbox went away.\n"
+
+
+async def test_plain_run_reports_a_stop_with_nothing_streamed() -> None:
+    output, errors = StringIO(), StringIO()
+    status = await run_once(
+        StoppedBackend("run.failed", with_answer=False),
+        RunRequest("Build it", None, "", "normal", "ask"),
+        stdout=output,
+        stderr=errors,
+    )
+
+    assert status == 1
+    assert output.getvalue() == "· Building it.\n"
+    assert errors.getvalue() == "failed: The sandbox went away.\n"
+
+
+async def test_jsonl_exit_code_says_how_the_run_ended_too() -> None:
+    output = StringIO()
+    status = await run_once(
+        StoppedBackend("run.cancelled"),
+        RunRequest("Build it", None, "", "normal", "ask"),
+        stdout=output,
+        jsonl=True,
+    )
+
+    assert status == 3
+    assert [orjson.loads(line)["type"] for line in output.getvalue().splitlines()] == [
+        "run.accepted",
+        "event",
+        "event",
+        "event",
+        "event",
+    ]
+
+
+class FlushRecorder(StringIO):
+    """Remembers what had been written at each flush, so a test can see what a reader at the
+    far end of a pipe would have seen at that moment."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[str] = []
+
+    @override
+    def flush(self) -> None:
+        self.seen.append(self.getvalue())
+        super().flush()
+
+
+async def test_plain_run_flushes_every_line_as_it_happens() -> None:
+    """Through a pipe nothing used to appear until the run ended: stdout is block-buffered off
+    a terminal, and the plain renderer never flushed."""
+
+    output = FlushRecorder()
+    await run_once(
+        PlainBackend(),
+        RunRequest("Build it", None, "", "normal", "ask"),
+        stdout=output,
+    )
+
+    assert output.seen[0] == "· Building it.\n"
+    assert output.seen[-1] == output.getvalue()
+
+
+async def test_no_follow_flushes_the_run_id() -> None:
+    output = FlushRecorder()
+    await run_once(
+        PlainBackend(),
+        RunRequest("Build it", None, "", "normal", "ask"),
+        stdout=output,
+        follow=False,
+    )
+
+    assert output.seen == ["run-1\n"]
+
+
+async def test_jsonl_rows_carry_the_event_id() -> None:
+    """The README names `event_id` as the fallback identity for an approval or a question, so
+    a JSONL consumer must be able to read it off the row."""
+
+    output = StringIO()
+    await run_once(
+        ApprovalBackend(),
+        RunRequest("Release it", None, "", "normal", "ask"),
+        stdout=output,
+        jsonl=True,
+    )
+
+    rows = [cast(JsonObject, orjson.loads(line)) for line in output.getvalue().splitlines()]
+    assert rows[1]["event"] == "approval.requested"
+    assert rows[1]["event_id"] == "evt-1"
+    assert rows[1]["seq"] == 1
+
+
+def test_newly_active_steps_accepts_any_sequence_that_is_not_text() -> None:
+    """A plan is typed as a `Sequence`; one built in process or replayed from history arrives
+    as a tuple, and used to be dropped for not being a list."""
+
+    from orca.output.plain import _newly_active_steps  # pyright: ignore[reportPrivateUsage]
+
+    plan = ({"step": "read the router", "status": "in_progress"},)
+    assert _newly_active_steps({"plan": plan}, set()) == ["read the router"]
+    assert _newly_active_steps({"plan": "read the router"}, set()) == []

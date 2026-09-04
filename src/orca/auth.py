@@ -17,15 +17,19 @@ from urllib.parse import urlsplit
 import typer
 
 from orca.connection import (
+    ALLOW_INSECURE_HTTP_ENV,
     ConfigRepository,
     ConnectionConfigError,
     CredentialBackendUnavailable,
     CredentialSource,
     CredentialStore,
     EndpointSource,
+    InsecureEndpointError,
     KeyringCredentialStore,
     current_connection_selection,
+    is_loopback,
     resolve_connection,
+    truthy_environment,
 )
 
 
@@ -76,6 +80,24 @@ def _inherit_root_selection(
         profile or (str(inherited_profile) if inherited_profile else None),
         url if url is not None else (str(inherited_url) if inherited_url else None),
         allow_insecure_http or inherited_insecure,
+    )
+
+
+def refuse_insecure_http(
+    endpoint: str, environment: Mapping[str, str], allow_insecure_http: bool
+) -> None:
+    """Refuse to bind a credential to a remote plaintext endpoint.
+
+    The same rule `resolve_connection` applies once a token exists, with the same words, so
+    a person sees one message whichever command hits it first.
+    """
+    if allow_insecure_http or is_loopback(endpoint) or urlsplit(endpoint).scheme != "http":
+        return
+    if truthy_environment(environment.get(ALLOW_INSECURE_HTTP_ENV), name=ALLOW_INSECURE_HTTP_ENV):
+        return
+    raise InsecureEndpointError(
+        f"refusing to bind a credential to {endpoint}, where it would be sent in the clear. "
+        + f"Use HTTPS, or set {ALLOW_INSECURE_HTTP_ENV}=true to accept the risk."
     )
 
 
@@ -153,6 +175,11 @@ def create_auth_app(
                 allow_insecure_http=True if allow_insecure_http else None,
                 require_store=True,
             )
+            # The resolver's own check is gated on a credential existing, and at this point
+            # none does yet: it let a remote plain-http login through, stored the token, and
+            # every later command then refused the profile it had just made. The refusal
+            # belongs before the secret is written. (found 2026-09-04)
+            refuse_insecure_http(connection.endpoint, environment, allow_insecure_http)
             token = _read_token(token_stdin=token_stdin)
             persist(
                 repository,

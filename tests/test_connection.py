@@ -336,3 +336,49 @@ def test_the_built_in_default_says_it_is_one(tmp_path: Path) -> None:
 
     assert connection.endpoint_source is EndpointSource.DEFAULT
     assert connection.endpoint == "http://127.0.0.1:8080"
+
+
+def test_login_refuses_to_bind_a_credential_to_a_remote_http_endpoint(tmp_path: Path) -> None:
+    """The resolver's check is gated on a credential existing, and at login none does yet:
+    the token was stored, and every later command then refused the profile login had just
+    made. The refusal has to come before the secret is written. (found 2026-09-04)"""
+    credentials = _Credentials()
+    app = create_auth_app(
+        config=ConfigRepository(home=tmp_path / "config"),
+        credentials=credentials,
+        environ={},
+        cwd=tmp_path,
+    )
+
+    refused = CliRunner().invoke(
+        app, ["login", "--url", "http://orch.example:8420", "--token-stdin"], input="secret\n"
+    )
+
+    assert refused.exit_code == 1, refused.output
+    assert "in the clear" in refused.output
+    assert credentials.values == {}
+
+    allowed = CliRunner().invoke(
+        app,
+        ["login", "--url", "http://orch.example:8420", "--token-stdin", "--allow-insecure-http"],
+        input="secret\n",
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert credentials.get("default", "http://orch.example:8420") == "secret"
+
+    by_environment = create_auth_app(
+        config=ConfigRepository(home=tmp_path / "other"),
+        credentials=_Credentials(),
+        environ={"ORCA_ALLOW_INSECURE_HTTP": "true"},
+        cwd=tmp_path,
+    )
+    assert (
+        CliRunner()
+        .invoke(
+            by_environment,
+            ["login", "--url", "http://orch.example:8420", "--token-stdin"],
+            input="secret\n",
+        )
+        .exit_code
+        == 0
+    )

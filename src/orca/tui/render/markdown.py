@@ -125,10 +125,13 @@ def _recover_flattened_lines(source: str) -> str:
         fence = _CODE_FENCE.match(content)
         if active_fence:
             recovered.append(line)
+            # A closing fence has nothing after it but space: a "```python" inside a
+            # "```" block is a line of the code, and the block goes on past it.
             if (
                 fence
                 and fence.group("fence")[0] == active_fence[0]
                 and len(fence.group("fence")) >= len(active_fence)
+                and not content[fence.end() :].strip()
             ):
                 active_fence = ""
             continue

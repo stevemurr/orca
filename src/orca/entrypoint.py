@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from orca.auth import auth_app
 from orca.backend import BackendError, RunRequest, ThreadSummary
@@ -34,6 +35,10 @@ from orca.tui.app import OrcaApp
 class GlobalOptions:
     profile: str | None
     url: str | None
+    #: The root's `--resume` and `--thread`. They used to apply only when no subcommand was
+    #: named, so `orca --resume chat` silently opened a blank conversation. (found 2026-09-04)
+    resume: bool = False
+    thread: str = ""
 
 
 app = typer.Typer(
@@ -64,6 +69,7 @@ def root(
     resume: bool = typer.Option(
         False, "--resume", "-r", help="Open with the recent conversations to pick one up."
     ),
+    thread: str = typer.Option("", "--thread", "-t", help="Continue a thread by id."),
 ) -> None:
     """Open the interactive conversation when no subcommand is supplied."""
 
@@ -72,9 +78,9 @@ def root(
         raise typer.Exit()
     token = push_connection_selection(profile=profile, url=url, allow_insecure_http=None)
     ctx.call_on_close(lambda: reset_connection_selection(token))
-    ctx.obj = GlobalOptions(profile, url)
+    ctx.obj = GlobalOptions(profile, url, resume=resume, thread=thread)
     if ctx.invoked_subcommand is None:
-        launch_tui(workspace="", thread="", profile=profile, url=url, resume=resume)
+        launch_tui(workspace="", thread=thread, profile=profile, url=url, resume=resume)
 
 
 @app.command("chat")
@@ -91,10 +97,10 @@ def chat(
     options = _options(ctx)
     launch_tui(
         workspace=workspace,
-        thread=thread,
+        thread=thread or options.thread,
         profile=options.profile,
         url=options.url,
-        resume=resume,
+        resume=resume or options.resume,
     )
 
 
@@ -152,8 +158,25 @@ def threads(ctx: typer.Context) -> None:
     table.add_column(ratio=1)
     table.add_column(no_wrap=True, style="dim")
     for row in rows:
-        table.add_row(row.thread_id, row.title, row.latest_run_status)
+        table.add_row(_plain(row.thread_id), _plain(row.title), _plain(row.latest_run_status))
     console.print(table)
+
+
+def _plain(value: str) -> Text:
+    """A backend string as a cell, and nothing more.
+
+    Passed as a bare `str`, Rich read it as markup: a title of `[i]x` lost its bracket, one
+    of `[/i]` raised `MarkupError`, and an escape sequence went straight to the terminal,
+    where `ESC ] 0 ; ... BEL` retitles the window. A title is text the model or another
+    person wrote, so it gets no say in how it is drawn. C0 and C1 controls (tab excepted) and
+    DEL are dropped; whatever followed an ESC is then just visible characters. (found 2026-09-04)
+    """
+    return Text("".join(ch for ch in value if _printable(ch)))
+
+
+def _printable(ch: str) -> bool:
+    code = ord(ch)
+    return ch == "\t" or not (code < 0x20 or 0x7F <= code <= 0x9F)
 
 
 @server_app.command("status")

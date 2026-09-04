@@ -196,16 +196,51 @@ def _turn_rows(
     return head, stream, tail
 
 
+#: Steps of a pinned plan shown at once. The strip above the composer has eight rows: one
+#: for the title, five for steps, and two for the lines that say how many more lie either
+#: side. A plan of fifteen steps used to fill the strip with its first seven, done, and
+#: the step the model was on was cut off below -- shown nowhere, since the transcript
+#: leaves the plan to the strip while the run goes.
+_PLAN_WINDOW = 5
+
+
 def render_plan(state: AppState, *, width: int) -> RenderableType | None:
-    """The active turn's checklist, for the strip above the composer. None when there is no
-    run going or it has no plan."""
-    del width
+    """The active turn's checklist, for the strip above the composer: a window around
+    the step the model is on, and a title that says which step of how many. None when
+    there is no run going or it has no plan."""
     if not state.turns:
         return None
     turn = state.turns[-1]
     if not _pinned(state, turn):
         return None
-    return Group(Text("Plan", style=f"bold {MUTED}"), _plan_checklist(turn))
+    steps = turn.plan
+    total = len(steps)
+    # The current step is the first not finished; a plan wholly done has none.
+    current = next((i for i, step in enumerate(steps) if step.status != "completed"), None)
+    title = Text(no_wrap=True, overflow="ellipsis")
+    title.append("Plan", style=f"bold {MUTED}")
+    title.append(
+        f" · step {current + 1} of {total}" if current is not None else f" · {total} of {total} done",
+        style=MUTED,
+    )
+    if turn.plan_explanation:
+        title.append(f" · {turn.plan_explanation}", style=f"italic {MUTED}")
+    title.truncate(max(1, width), overflow="ellipsis")
+    centre = current if current is not None else total - 1
+    start = max(0, min(centre - _PLAN_WINDOW // 2, total - _PLAN_WINDOW))
+    shown = steps[start : start + _PLAN_WINDOW]
+    checklist = Table.grid(padding=(0, 1))
+    checklist.add_column(width=2, no_wrap=True)
+    checklist.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+    if start:
+        checklist.add_row(Text(""), Text(f"… {start} more above", style=MUTED))
+    for step in shown:
+        glyph, style, text_style = _plan_glyph(step.status)
+        checklist.add_row(Text(glyph, style=style), Text(step.step, style=text_style))
+    below = total - start - len(shown)
+    if below:
+        checklist.add_row(Text(""), Text(f"… {below} more below", style=MUTED))
+    return Group(title, checklist)
 
 
 def _pinned(state: AppState, turn: TurnState) -> bool:

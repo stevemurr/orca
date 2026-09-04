@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
 
+from orca import process
 from orca.json_types import JsonObject, JsonValue
 from orca.workspace_context import (
     LocalWorkspace,
@@ -250,3 +252,24 @@ def test_a_record_carries_the_skills_the_backend_listed() -> None:
     )
 
     assert binding.skills == (Choice("deploy", "Ship a release."), Choice("review"))
+
+
+async def test_run_process_builds_its_environment_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`build_env` runs a login shell the first time, for up to ten seconds; called inline
+    before the first await it stalled the whole loop for 0.73s. (found 2026-09-04)"""
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    original = process.build_env
+
+    def recording(overrides: dict[str, str] | None = None) -> dict[str, str]:
+        seen.append(threading.get_ident())
+        return original(overrides)
+
+    monkeypatch.setattr(process, "build_env", recording)
+
+    result = await process.run_process(process.ProcessSpec(argv=["true"], cwd=tmp_path))
+
+    assert result.ok
+    assert seen and all(ident != loop_thread for ident in seen)

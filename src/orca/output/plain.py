@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import aclosing
 from typing import BinaryIO, TextIO
 
 import orjson
 
 from orca.app.actions import Connected, EventReceived, RunAccepted
-from orca.app.model import AppState
+from orca.app.model import AppState, TurnNote, TurnState
 from orca.app.update import reduce
 from orca.backend import RunRequest, TerminalBackend
 from orca.json_types import JsonObject
@@ -24,10 +24,16 @@ async def run_once(
     jsonl: bool = False,
     stdout: TextIO | None = None,
     binary_stdout: BinaryIO | None = None,
+    stderr: TextIO | None = None,
 ) -> int:
-    """Start one durable run and write its canonical public projection."""
+    """Start one durable run and write its canonical public projection.
+
+    The exit code says how the run ended, so a script need not parse the output to find out:
+    0 completed, 1 failed, 2 stopped for an approval or a question, 3 cancelled or blocked.
+    """
 
     text_output = stdout or sys.stdout
+    error_output = stderr or sys.stderr
     byte_output = binary_stdout or getattr(text_output, "buffer", None)
     session = await backend.connect()
     state = reduce(
@@ -64,7 +70,7 @@ async def run_once(
             byte_output=byte_output,
         )
     elif not follow:
-        text_output.write(f"{accepted.run_id}\n")
+        _line(text_output, accepted.run_id)
 
     if not follow:
         return 0
@@ -85,6 +91,7 @@ async def run_once(
                         "version": 1,
                         "type": "event",
                         "seq": event.sequence,
+                        "event_id": event.event_id,
                         "event": event.kind,
                         "payload": dict(event.payload),
                     },
@@ -96,29 +103,62 @@ async def run_once(
                 text = str(event.payload.get("text") or "").strip()
                 if update_id and text and seen_progress.get(update_id) != text:
                     seen_progress[update_id] = text
-                    text_output.write(f"· {text}\n")
+                    _line(text_output, f"· {text}")
             elif event.kind == "plan.progress":
                 for started in _newly_active_steps(event.payload, announced_steps):
-                    text_output.write(f"▸ {started}\n")
+                    _line(text_output, f"▸ {started}")
             elif event.kind in {"approval.requested", "question.requested"}:
                 title = str(
                     event.payload.get("title") or event.payload.get("prompt") or "Input needed"
                 )
-                text_output.write(f"! {title}\n")
+                _line(text_output, f"! {title}")
             if event.kind in {"approval.requested", "question.requested"}:
                 input_required = True
                 break
 
-    if not jsonl and state.turns:
-        turn = state.turns[-1]
-        answer = turn.answer
-        if answer:
+    if input_required:
+        return 2
+    if not state.turns:
+        return 0
+    turn = state.turns[-1]
+    if not jsonl:
+        # What the model said stays, whichever way the run ended: a failure's partial answer
+        # is the part of the transcript most worth reading.
+        if turn.answer:
             if seen_progress:
-                text_output.write("\n")
-            text_output.write(answer.rstrip() + "\n")
-        elif turn.status not in {"completed", "running", "queued"}:
-            text_output.write(f"{turn.status}\n")
-    return 2 if input_required else 0
+                _line(text_output, "")
+            _line(text_output, turn.answer.rstrip())
+        if turn.status in _STOPPED:
+            # The status and the reason go to stderr, where a diagnostic belongs: stdout is
+            # the answer and nothing else, so `orca run … > answer.txt` stays clean and the
+            # exit code, not a grep, tells the caller the run did not finish.
+            reason = _ended_reason(turn)
+            _line(error_output, f"{turn.status}: {reason}" if reason else turn.status)
+    return _STOPPED.get(turn.status, 0)
+
+
+#: Exit codes for the ways a run stops short of an answer. A failure is the backend's fault
+#: and gets the conventional 1; a cancel or a block is somebody's decision, so it is told apart
+#: from both a failure and the 2 that means "answer the prompt and run again".
+_STOPPED: Mapping[str, int] = {"failed": 1, "cancelled": 3, "blocked": 3}
+
+
+def _ended_reason(turn: TurnState) -> str:
+    """The summary a terminal event gave for stopping, as the reducer noted it on the turn."""
+
+    for item in reversed(turn.timeline):
+        if isinstance(item, TurnNote) and item.kind == "ended":
+            return item.text
+    return ""
+
+
+def _line(output: TextIO, text: str) -> None:
+    """Write one line and flush it. Plain output is followed as it happens -- through a pipe as
+    often as on a terminal -- and a pipe is block-buffered, so an unflushed line sat invisible
+    until the run ended."""
+
+    output.write(f"{text}\n")
+    output.flush()
 
 
 def _newly_active_steps(payload: JsonObject, announced: set[str]) -> list[str]:
@@ -130,7 +170,9 @@ def _newly_active_steps(payload: JsonObject, announced: set[str]) -> list[str]:
     """
 
     entries = payload.get("plan")
-    if not isinstance(entries, list):
+    # Any sequence but a string: a plan decoded from the wire is a list, one built in process
+    # or replayed from history may be a tuple, and a `str` is a sequence of its own letters.
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
         return []
     started: list[str] = []
     for entry in entries:

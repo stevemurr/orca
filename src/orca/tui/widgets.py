@@ -62,8 +62,9 @@ class Composer(TextArea):
     async def _on_key(self, event: events.Key) -> None:
         if self.approval_keys:
             decision = self.approval_keys.get(event.key)
-            if decision is None and event.key == "enter" and not self.text.strip():
-                decision = self.approval_keys.get("1")
+            if event.key == "enter" and self.text.strip():
+                # Enter with words in the box sends the words, not the decision.
+                decision = None
             if decision is not None:
                 event.stop()
                 event.prevent_default()

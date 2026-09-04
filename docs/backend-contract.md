@@ -271,7 +271,7 @@ which is the one failure this rule exists to prevent.
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | A checklist above the activity rows. Each event carries the **whole** list and replaces the previous one. Nothing counts the steps. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
 | `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments`, `allowed_decisions`, `grant` | Inline at the end of the transcript with its choices, and the run parks. `1`, `y` or Enter approve; `2` allows always when offered; `3`, `n` or Esc reject. `title` is what a person judges. `grant` is what "always" would cover, in words -- `git commands`, `file writes` -- and orca puts it on that choice. From `arguments`: `argv` is shown as a shell-quoted command line; `path` with `content` is shown as the file, highlighted by its extension; `path` with `old` and `new` is shown as a diff. |
-| `approval.resolved` | `decision` | The prompt becomes its answer, kept in the transcript where it was decided. A run paused under the modal stays paused: send `run.paused` again after this, since orca reads a resolution as running. |
+| `approval.resolved` | `decision` | The prompt leaves the transcript and the decision is said once, as a notice by the composer -- `Approved: <title>`, `Rejected: <title>`, `Approved, and always from now on: <title>`; an unknown `decision` is shown as sent. The tool row that follows is the record of what was done. Orca reads a resolution as running: a run that was paused while the prompt was up needs `run.paused` sent again after this. |
 | `question.requested` | `question_id`, `prompt`, `options[]` | Inline above the composer; the next thing typed is the answer. `options` are the agent's guesses, shown numbered — a number picks one, anything else is sent as typed, and an empty answer is sent as "I am not answering". |
 | `question.resolved` | — | Dismisses it. |
 | `context.compacted` | `summary` | A note on the turn: the agent now works from a summary. User-visible on purpose; it is the honest explanation for a change in behaviour. |
@@ -313,10 +313,14 @@ to show emits none.
 | `answer` | `question_id`, `content` |
 | `resolve_approval` | `approval_id`, `decision` |
 
-`decision` is one of the values that request's `allowed_decisions` offered. orca binds `1` to
-`approve` and `3` to `reject`, and offers a second affirmative on `2` when the request lists
-`approve_bash_always` — the one decision name orca knows by sight, because a persistent grant
-needs its own key. A backend with a different vocabulary still gets `1` and `3`.
+`decision` is one of the values that request's `allowed_decisions` offered. orca binds the digit
+`n` to the nth value, in the order the request listed them (up to nine), so a backend with its
+own vocabulary still gets keys that send what it will accept. The names orca knows by sight are
+shown with a label — `approve` "Approve once", `approve_bash_always` "Always approve bash" (or
+"Always allow <grant>" when the request names one), `reject`, `allow`, `allow_always`, `deny`;
+any other value is shown as itself. `y` and Enter send the first `approve`/`allow` offered and
+`n` and Esc the first `reject`/`deny`, when the list has them. A request that lists no
+decisions is offered `approve` and `reject`.
 
 Any response is accepted; a `status` key is shown as a one-line notice. Refuse a command you
 cannot honour rather than accepting it silently — the person is watching for the run to change.

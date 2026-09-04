@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import override
 from unittest.mock import patch
 
+import pytest
 from textual.widgets import ContentSwitcher, Static
 
 from orca.app.actions import CommandInvoked, EventReceived, RunAccepted
@@ -25,7 +26,12 @@ from orca.backend import (
 )
 from orca.json_types import JsonObject
 from orca.tui.app import OrcaApp
-from orca.tui.screens import HelpScreen, ThreadPickerScreen, nested_threads
+from orca.tui.screens import (
+    HelpScreen,
+    ThreadPickerScreen,
+    _display_timestamp,  # pyright: ignore[reportPrivateUsage]
+    nested_threads,
+)
 from orca.tui.widgets import Composer
 
 
@@ -840,11 +846,217 @@ async def test_an_approval_is_answered_from_anywhere_and_digits_still_type_other
         )
         await pilot.pause()
 
-        # Focus is not on the input, and 2 is not offered.
+        # Focus is not on the input, and there is no third decision for 3 to send.
         app.set_focus(None)
-        await pilot.press("2")
+        await pilot.press("3")
         await pilot.pause()
         assert backend.commands == []
         await pilot.press("1")
         await pilot.pause()
         assert backend.commands == [("run-1", ResolveApproval("approval-1", "approve"))]
+
+
+class DownBackend(FakeBackend):
+    """A backend whose connection fails in the backend's own words."""
+
+    @override
+    async def connect(self) -> SessionInfo:
+        raise BackendError("The server is not running.")
+
+
+class BrokenConnectBackend(FakeBackend):
+    """A backend whose connection dies of a fault orca did not foresee."""
+
+    @override
+    async def connect(self) -> SessionInfo:
+        raise RuntimeError("socket blew up")
+
+
+class BrokenStartBackend(FakeBackend):
+    @override
+    async def start_run(self, request: RunRequest) -> RunInfo:
+        raise ValueError("bad request shape")
+
+
+class ForeignVocabularyBackend(FakeBackend):
+    """A backend whose decisions are `allow` and `deny`, not `approve` and `reject`."""
+
+
+def _approval(sequence: int, *decisions: str) -> EventReceived:
+    return EventReceived(
+        event(
+            sequence,
+            "approval.requested",
+            {
+                "approval_id": "approval-1",
+                "title": "Run the tests?",
+                "allowed_decisions": list(decisions),
+            },
+        )
+    )
+
+
+async def test_a_notice_made_before_the_first_tick_is_not_gone_by_the_next() -> None:
+    """The clock starts at zero, and a notice made before it was read was stamped with
+    zero: on the first tick it was already long expired, so a failed boot flashed its
+    error for a frame and left an empty line. The clock is read before anything runs."""
+    app = OrcaApp(DownBackend())
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        assert app.model.clock > 0
+        assert app.model.notices and app.model.notices[-1].shown_at >= app.model.clock - 1
+        await pilot.pause(0.7)
+        assert app.model.notices and "not running" in app.model.notices[-1].message
+        assert app.query_one("#notice", Static).has_class("visible")
+        assert not app.model.booting
+
+
+async def test_a_worker_that_dies_of_an_unforeseen_error_still_reports_it() -> None:
+    """The bodies catch the backend's own errors; anything else used to die in silence
+    with `booting` or `submitting` left set and the input disabled for good."""
+    app = OrcaApp(BrokenConnectBackend())
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        await pilot.pause(0.2)
+        assert not app.model.booting
+        assert not app.query_one(Composer).disabled
+        assert app.model.notices and "RuntimeError: socket blew up" in app.model.notices[-1].message
+
+    app = OrcaApp(BrokenStartBackend())
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.replace_text("hello")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause(0.2)
+        assert not app.model.submitting
+        assert not composer.disabled
+        assert app.model.notices and "ValueError: bad request shape" in app.model.notices[-1].message
+
+
+async def test_the_approval_keys_follow_the_backends_own_vocabulary() -> None:
+    """A backend that offers `allow` and `deny` used to get keys that sent `approve` and
+    `reject`, which the reducer refused: nothing could answer it. The digits send the
+    decisions in the backend's order; y, n, Enter and Esc find the yes and the no."""
+    backend = ForeignVocabularyBackend()
+    app = OrcaApp(backend)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(_approval(1, "allow", "allow_always", "deny"))
+        await pilot.pause()
+        assert app.query_one(Composer).approval_keys == {
+            "1": "allow",
+            "2": "allow_always",
+            "3": "deny",
+            "y": "allow",
+            "enter": "allow",
+            "n": "deny",
+            "escape": "deny",
+        }
+        await pilot.press("y")
+        await pilot.pause()
+        assert backend.commands[-1] == ("run-1", ResolveApproval("approval-1", "allow"))
+
+        app.apply_model_action(EventReceived(event(2, "approval.resolved", {"decision": "allow"})))
+        app.apply_model_action(_approval(3, "allow", "deny"))
+        await pilot.pause()
+        app.set_focus(None)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert backend.commands[-1] == ("run-1", ResolveApproval("approval-1", "deny"))
+
+        # A vocabulary orca has never seen has its digits and nothing else; Escape does
+        # not guess at a refusal.
+        app.apply_model_action(EventReceived(event(4, "approval.resolved", {"decision": "deny"})))
+        app.apply_model_action(_approval(5, "proceed", "abort"))
+        await pilot.pause()
+        assert app.query_one(Composer).approval_keys == {"1": "proceed", "2": "abort"}
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.model.interaction is not None and not app.model.interaction.sending
+        await pilot.press("2")
+        await pilot.pause()
+        assert backend.commands[-1] == ("run-1", ResolveApproval("approval-1", "abort"))
+
+
+async def test_a_question_with_a_dozen_options_shows_the_last_of_them() -> None:
+    """The strip was a fixed fourteen rows that did not scroll, so options past the
+    ninth were cut off; and a single-cell number column drew the tenth as `…`."""
+    app = OrcaApp(FakeBackend())
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app.apply_model_action(RunAccepted("run-1", "thread-1"))
+        app.apply_model_action(EventReceived(event(1, "run.created", {"message": "hi"})))
+        options = [f"option {index}" for index in range(1, 13)]
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    2,
+                    "question.requested",
+                    {"question_id": "q1", "prompt": "Pick one", "options": options},
+                )
+            )
+        )
+        await pilot.pause()
+        pane = app.query_one("#interaction")
+        body = app.query_one("#interaction-body", Static)
+        assert pane.has_class("visible")
+        # Everything fits at this height, so the last option is on screen as drawn.
+        assert pane.max_scroll_y == 0
+        assert body.region.height >= 12
+        drawn = "\n".join(
+            "".join(segment.text for segment in body.render_line(row))
+            for row in range(body.region.height)
+        )
+        assert "12  option 12" in drawn
+        assert "…" not in drawn
+
+        # Forty options do not fit; the pane scrolls rather than cutting them off.
+        app.apply_model_action(
+            EventReceived(
+                event(
+                    3,
+                    "question.requested",
+                    {
+                        "question_id": "q2",
+                        "prompt": "Pick one",
+                        "options": [f"option {index}" for index in range(1, 41)],
+                    },
+                )
+            )
+        )
+        await pilot.pause()
+        assert pane.max_scroll_y > 0
+        pane.scroll_end(animate=False)
+        await pilot.pause()
+        assert pane.scroll_y == pane.max_scroll_y
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "not-a-date",
+        "9999-12-31T23:59:59+00:00",
+        "0001-01-01T00:00:00+00:00",
+        "0001-01-01T00:00:00+14:00",
+        "9999-12-31T23:59:59-12:00",
+    ),
+)
+def test_a_timestamp_that_cannot_be_shown_is_left_out_rather_than_shown_raw(value: str) -> None:
+    """`not-a-date` was displayed as it came, and a date at either end of the calendar
+    raised from `astimezone` and took the picker down with it."""
+    shown = _display_timestamp(value)
+    assert isinstance(shown, str)
+    assert shown != value
+
+
+def test_a_timestamp_that_is_not_a_date_is_left_out() -> None:
+    assert _display_timestamp("not-a-date") == ""
+    assert _display_timestamp("") == ""
+    assert _display_timestamp("2026-09-04T12:00:00+00:00")

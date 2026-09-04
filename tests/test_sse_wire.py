@@ -19,7 +19,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from orca.client import HttpApiClient, SSEParser
+from orca.client import ApiError, HttpApiClient, MalformedEventError, SSEParser
 
 TERMINAL_RUN = (
     b'id: 1\ndata: {"event_id": "evt-1", "seq": 1, "type": "run.created", '
@@ -113,3 +113,59 @@ def test_parser_reads_comments_and_repeated_data_lines() -> None:
 
     (event,) = parser.feed("")
     assert (event.id, event.event, event.data) == ("7", "stream.end", {"reason": "terminal"})
+
+
+def test_the_client_never_consults_a_proxy_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`HTTP_PROXY` made httpx route every plain-http request -- bearer token included, and
+    for 127.0.0.1 too -- through a plaintext proxy. The health probe already ignored the
+    environment; the client carrying the credential must as well. (found 2026-09-04)"""
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:3128")
+
+    client = HttpApiClient("http://127.0.0.1:8080", token="secret")
+
+    transport = client._client  # pyright: ignore[reportPrivateUsage]
+    assert transport.trust_env is False
+    # Belt and braces: with the environment ignored there is no proxy mount at all.
+    assert transport._mounts == {}  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_a_dead_port_during_a_history_read_is_an_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`read_events` streams rather than going through `_send`, so the connect failure it hit
+    was a raw `httpx.ConnectError` that no `except ApiError` above it caught."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    client = _client(handler, monkeypatch)
+    with pytest.raises(ApiError, match="server_unreachable"):
+        await client.read_events("run-1")
+    await client.aclose()
+
+
+async def test_a_frame_that_is_not_json_is_an_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b"id: 1\nevent: run.progress\ndata: {not json\n\n",
+        )
+
+    client = _client(handler, monkeypatch)
+    with pytest.raises(MalformedEventError, match="not JSON"):
+        async for _ in client.stream_events("run-1"):
+            pass
+    await client.aclose()
+
+
+def test_parser_reports_bad_json_as_a_malformed_frame() -> None:
+    parser = SSEParser()
+    assert parser.feed("data: {oops") == []
+
+    with pytest.raises(ApiError) as raised:
+        parser.feed("")
+    assert raised.value.code == "malformed_frame"

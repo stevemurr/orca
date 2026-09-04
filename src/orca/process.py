@@ -204,8 +204,11 @@ def login_path() -> str:
 
     Blocking, and the only blocking spawn in the tree: a login shell sources the user's rc
     files, which is 0.7s with a light zshrc and seconds with nvm/pyenv/conda. Callers on the
-    event loop must therefore pre-warm it off-loop. Left lazy it froze the entire API on the
-    first client-triggered subprocess. (found 2026-08-17)
+    event loop must therefore call it through `asyncio.to_thread`, as `run_process` does;
+    the first call pays the shell and every later one reads the cache. Left lazy and inline
+    it froze the entire API on the first client-triggered subprocess (found 2026-08-17), and
+    the same stall came back in the extracted client when `run_process` called `build_env`
+    before its first await -- 0.73s with the event loop stopped. (found 2026-09-04)
     """
     global _login_path
     if _login_path is None:
@@ -303,7 +306,8 @@ async def run_process(spec: ProcessSpec) -> ProcessResult:
         raise ProcessError("argv must not be empty")
 
     started = time.monotonic()
-    env = build_env(spec.env_overrides)
+    # Off-loop: the first call resolves the login PATH by running a shell (see `login_path`).
+    env = await asyncio.to_thread(build_env, spec.env_overrides)
 
     try:
         proc = await asyncio.create_subprocess_exec(

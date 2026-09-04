@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import sys
 
 import pytest
 import typer
+from rich.console import Console
 from typer.testing import CliRunner
 
 from orca import entrypoint
+from orca.backend import ThreadSummary
 
 
 def normalized(value: str) -> str:
@@ -139,3 +142,62 @@ def test_full_screen_mode_fails_fast_without_a_terminal(monkeypatch: pytest.Monk
         entrypoint.launch_tui(workspace="", thread="", profile=None, url=None)
 
     assert raised.value.exit_code == 2
+
+
+def test_root_resume_and_thread_apply_to_an_explicit_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`orca --resume chat` silently ignored the flag, and the README's `orca --thread <id>`
+    did not exist at all. (found 2026-09-04)"""
+    calls: list[dict[str, object]] = []
+
+    def launch(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(entrypoint, "launch_tui", launch)
+
+    assert CliRunner().invoke(entrypoint.app, ["--resume", "chat"]).exit_code == 0
+    assert CliRunner().invoke(entrypoint.app, ["--thread", "thread-9"]).exit_code == 0
+    assert CliRunner().invoke(entrypoint.app, ["--thread", "thread-9", "chat"]).exit_code == 0
+    own = CliRunner().invoke(entrypoint.app, ["--thread", "root", "chat", "--thread", "own"])
+    assert own.exit_code == 0
+
+    assert [call["resume"] for call in calls] == [True, False, False, False]
+    assert [call["thread"] for call in calls] == ["", "thread-9", "thread-9", "own"]
+
+
+def test_threads_prints_backend_titles_as_text_not_markup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Titles went into the table as Rich markup: `[i]x` lost its bracket, `[/i]` raised
+    `MarkupError`, and an OSC sequence reached the terminal and retitled the window."""
+    titles = ["[i]x", "[/i]", "\x1b]0;evil\x07title", "tab\tkept"]
+
+    class Backend:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def connect(self) -> None:
+            pass
+
+        async def recent_threads(self) -> tuple[ThreadSummary, ...]:
+            return tuple(ThreadSummary(f"t{n}", title, "done") for n, title in enumerate(titles))
+
+        async def close(self) -> None:
+            pass
+
+    def any_connection(**_kwargs: object) -> object:
+        return object()
+
+    monkeypatch.setattr(entrypoint, "resolve_connection", any_connection)
+    monkeypatch.setattr(entrypoint, "HttpBackend", Backend)
+    monkeypatch.setattr(entrypoint, "console", Console(file=io.StringIO(), width=120))
+
+    result = CliRunner().invoke(entrypoint.app, ["threads"])
+
+    assert result.exit_code == 0, result.output
+    file = entrypoint.console.file
+    assert isinstance(file, io.StringIO)
+    printed = file.getvalue()
+    assert "[i]x" in printed
+    assert "[/i]" in printed
+    assert "\x1b" not in printed and "\x07" not in printed
+    assert "]0;eviltitle" in printed
+    # The tab survives the filter; Rich then expands it to spaces when it draws the cell.
+    assert "tab" in printed and "kept" in printed

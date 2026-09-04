@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, cast
@@ -32,6 +33,11 @@ class RunStatus(str, Enum):
 #: How loudly a notice is shown. Closed, because it is orca's own vocabulary: a backend never
 #: sends one, so there is no unknown value to carry.
 NoticeLevel = Literal["info", "warning", "error"]
+
+#: How long a notice stays, by how much it matters. An error waits to be read; a decision
+#: is confirmed and gone. One table for the reducer that prunes and the renderer that
+#: shows, so a notice is never drawn after it is dropped, or dropped while still drawn.
+NOTICE_SECONDS: Mapping[NoticeLevel, float] = {"info": 3.0, "warning": 6.0, "error": 10.0}
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +239,13 @@ class Notice:
 
     message: str
     level: NoticeLevel = "info"
+    #: Zero means the clock had not been read when the notice was made -- a boot-time
+    #: error, say. Such a notice is fresh until the first tick stamps it.
     shown_at: float = 0.0
+
+    def expired(self, now: float) -> bool:
+        """Whether its time is up at `now`. A notice never stamped is still fresh."""
+        return self.shown_at > 0 and now - self.shown_at >= NOTICE_SECONDS[self.level]
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +318,12 @@ class AppState:
     interaction: InteractionState | None = None
     composer_draft: str = ""
     submitting: bool = False
+    #: An `/add` is with the backend and not yet answered. Before the first message it is
+    #: also what makes the thread, so a message sent meanwhile would make a second one.
+    adding_folder: bool = False
+    #: A message was on its way when the conversation was reset under it, by a workspace
+    #: switch or a reconnect. The run it starts belongs to the conversation that was left.
+    orphaned_submission: bool = False
     developer: bool = False
     developer_cursor: int = 0
     developer_events: tuple[str, ...] = ()
@@ -340,3 +358,8 @@ class AppState:
         if self.active_run_id:
             return self.active_run_id
         return self.turns[-1].run_id if self.turns else ""
+
+    @property
+    def live_notices(self) -> tuple[Notice, ...]:
+        """The notices still within their time on this clock, oldest first."""
+        return tuple(notice for notice in self.notices if not notice.expired(self.clock))

@@ -398,7 +398,7 @@ def canonical_endpoint(value: str) -> str:
     return urlunsplit(canonical_parts)
 
 
-def _is_loopback(endpoint: str) -> bool:
+def is_loopback(endpoint: str) -> bool:
     hostname = urlsplit(endpoint).hostname
     if hostname is None:
         return False
@@ -411,7 +411,7 @@ def _is_loopback(endpoint: str) -> bool:
         return False
 
 
-def _truthy_environment(value: str | None, *, name: str) -> bool:
+def truthy_environment(value: str | None, *, name: str) -> bool:
     if value is None or not value.strip():
         return False
     normalized = value.strip().lower()
@@ -498,7 +498,7 @@ def resolve_connection(
     insecure_allowed = (
         allow_insecure_http
         if allow_insecure_http is not None
-        else _truthy_environment(
+        else truthy_environment(
             environment.get(ALLOW_INSECURE_HTTP_ENV), name=ALLOW_INSECURE_HTTP_ENV
         )
     )
@@ -531,7 +531,7 @@ def resolve_connection(
     if (
         token
         and urlsplit(endpoint).scheme == "http"
-        and not _is_loopback(endpoint)
+        and not is_loopback(endpoint)
         and not insecure_allowed
     ):
         raise InsecureEndpointError(

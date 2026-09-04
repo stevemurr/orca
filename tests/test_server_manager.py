@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import shlex
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from typing import cast
@@ -12,7 +15,15 @@ from typer.testing import CliRunner
 
 from orca import entrypoint as cli
 from orca.connection import Connection, CredentialSource
-from orca.server_manager import LocalServerManager, can_manage, child_environment
+from orca.process import process_exists
+from orca.server_manager import (
+    LocalServerManager,
+    ManagedServerError,
+    _launch_argv,  # pyright: ignore[reportPrivateUsage]
+    _Receipt,  # pyright: ignore[reportPrivateUsage]
+    can_manage,
+    child_environment,
+)
 
 STUB = Path(__file__).parent / "support" / "stub_backend.py"
 
@@ -122,3 +133,156 @@ def test_a_started_server_is_told_the_credential_by_the_name_it_reads() -> None:
         "HARNESS_TOKEN": "secret",
         "ORCA_MANAGED_INSTANCE_ID": "inst-1",
     }
+
+
+def test_launch_argv_fills_only_the_two_named_tokens() -> None:
+    """`str.format` on every item raised `KeyError` for any other brace: a JSON literal or a
+    regex in the command could not be started at all. (found 2026-09-04)"""
+    argv = ["serve", "--bind", "{host}:{port}", "--opts", '{"a":1}', "--match", "^a{2,3}$"]
+
+    assert _launch_argv(argv, host="127.0.0.1", port=8420) == [
+        "serve",
+        "--bind",
+        "127.0.0.1:8420",
+        "--opts",
+        '{"a":1}',
+        "--match",
+        "^a{2,3}$",
+    ]
+    assert _launch_argv(["serve"], host="::1", port=1) == ["serve", "--host", "::1", "--port", "1"]
+
+
+def _long_lived() -> subprocess.Popen[bytes]:
+    """A process standing in for a backend orca started earlier; its own session, like one."""
+    return subprocess.Popen(["sleep", "30"], start_new_session=True)
+
+
+def _orphaned_worker() -> tuple[int, int]:
+    """A group whose leader forked a worker and exited: `(leader pid, worker pid)`."""
+    leader: subprocess.Popen[str] = subprocess.Popen(
+        ["sh", "-c", "sleep 30 & echo $!; exit 0"],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    with leader:
+        assert leader.stdout is not None
+        # `Popen.stdout` is typed `IO[Any]` whatever the text mode, so the read is cast.
+        worker = int(cast(str, leader.stdout.read()).strip())
+    return leader.pid, worker
+
+
+def _manager(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> LocalServerManager:
+    monkeypatch.setenv("ORCA_CONFIG_HOME", str(tmp_path / "config"))
+    manager = LocalServerManager(_connection("default", "http://localhost:9911"))
+
+    async def unreachable() -> None:
+        return None
+
+    # A health probe that never gets through: the transient miss every case here is about.
+    monkeypatch.setattr(manager, "_probe", unreachable)
+    return manager
+
+
+async def test_a_live_but_unhealthy_server_is_not_replaced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A transient probe miss read as "not running", so `start()` launched a second server,
+    wrote its receipt over the first one's, and on failure deleted it -- leaving the live
+    original with no receipt and nothing able to stop it. (found 2026-09-04)"""
+    manager = _manager(monkeypatch, tmp_path)
+    monkeypatch.setenv("ORCA_SERVER_COMMAND", "sh -c 'exit 1'")
+    original = _long_lived()
+    try:
+        receipt = _Receipt(
+            endpoint=manager.connection.endpoint,
+            instance_id="original",
+            pid=original.pid,
+            pgid=original.pid,
+            started_at="2026-09-04T00:00:00+00:00",
+        )
+        manager._write_receipt(receipt)  # pyright: ignore[reportPrivateUsage]
+
+        with pytest.raises(ManagedServerError, match=f"pid {original.pid} still exists"):
+            _ = await manager.start(timeout_s=1)
+
+        assert manager._read_receipt() == receipt  # pyright: ignore[reportPrivateUsage]
+        assert original.poll() is None
+    finally:
+        original.kill()
+        _ = original.wait()
+
+
+async def test_a_failed_start_signals_the_whole_group_after_the_leader_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A launcher that forks a worker and exits leaves the worker in the leader's group.
+    Signalling only when the leader was alive left that worker holding the port."""
+    manager = _manager(monkeypatch, tmp_path)
+    marker = tmp_path / "worker.pid"
+    monkeypatch.setenv(
+        "ORCA_SERVER_COMMAND",
+        f"sh -c 'sleep 30 & echo $! > {shlex.quote(str(marker))}; exit 0'",
+    )
+
+    with pytest.raises(ManagedServerError, match="did not start"):
+        _ = await manager.start(timeout_s=1)
+
+    worker = int(marker.read_text().strip())
+    # SIGKILL is delivered asynchronously; give the kernel a moment before checking.
+    for _ in range(50):
+        if not process_exists(worker):
+            break
+        await asyncio.sleep(0.02)
+    assert not process_exists(worker)
+    assert not manager.state_path.exists()
+
+
+async def test_stop_signals_the_group_when_only_the_leader_is_gone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    leader, worker = _orphaned_worker()
+    manager._write_receipt(  # pyright: ignore[reportPrivateUsage]
+        _Receipt(
+            endpoint=manager.connection.endpoint,
+            instance_id="orphaned",
+            pid=leader,
+            pgid=leader,
+            started_at="2026-09-04T00:00:00+00:00",
+        )
+    )
+
+    status = await manager.stop(timeout_s=1)
+
+    assert not status.running
+    for _ in range(50):
+        if not process_exists(worker):
+            break
+        await asyncio.sleep(0.02)
+    assert not process_exists(worker)
+
+
+async def test_a_missing_executable_is_a_managed_server_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`start_detached` raised `ProcessError`, which nothing on the CLI path caught, so a
+    typo in `ORCA_SERVER_COMMAND` was a traceback rather than a sentence. (found 2026-09-04)"""
+    manager = _manager(monkeypatch, tmp_path)
+    monkeypatch.setenv("ORCA_SERVER_COMMAND", "/nonexistent/harness serve")
+
+    with pytest.raises(ManagedServerError, match="executable not found: /nonexistent/harness"):
+        _ = await manager.start(timeout_s=1)
+
+
+def test_the_cli_reports_a_missing_executable_as_a_sentence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ORCA_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("ORCA_SERVER_COMMAND", "/nonexistent/harness serve")
+
+    result = CliRunner().invoke(cli.app, ["--url", "http://localhost:9913", "server", "start"])
+
+    assert result.exit_code == 1
+    assert "executable not found: /nonexistent/harness" in result.output
+    assert "Traceback" not in result.output

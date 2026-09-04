@@ -104,7 +104,7 @@ These are the kinds orca renders. A backend that emits only `run.created`, `answ
 | `plan.progress` | `explanation`, `plan[]` of `{step, status}` | The model's own checklist, rendered above the activity rows. Each event carries the **complete** list and replaces the previous one; there is no merge rule. Nothing counts the steps, so two `in_progress` rows render as two. |
 | `plan.available` | `artifact_id`, `path` | Offers an artifact in the conversation and the review view. |
 | `approval.requested` | `approval_id`, `title`, `summary`, `risk`, `arguments.argv`, `allowed_decisions`, `grant` | Asks at the end of the turn and parks the run. `title` is written for a person to judge. `allowed_decisions` is what is offered — orca binds `1` to `approve`, `3` to `reject`, and `2` to `approve_bash_always`, the one persistent grant it knows by sight, when the request lists it. `grant` says in words what that grant would cover, and orca shows it on the choice. |
-| `approval.resolved` | — | Dismisses the modal. |
+| `approval.resolved` | `decision` | Takes the prompt down and says the decision once, as a notice by the composer. |
 | `question.requested` | `question_id`, `prompt` | Asks inline above the composer; the next thing typed becomes the answer. |
 | `question.resolved` | — | Dismisses it. |
 | `run.paused` | — | Not an ending. |
@@ -258,20 +258,34 @@ exit_code = asyncio.run(
 | `/inspect` | developer events, on their own cursor, never mixed into the conversation |
 | Enter · Shift+Enter · Esc · Ctrl+P | send · newline · back, or pause from the conversation · command palette |
 
-Approvals open a modal with explicit one-shot, persistent-when-offered, and reject choices.
-Questions stay inline above the composer.
+Approvals are asked inline at the end of the transcript, with explicit one-shot,
+persistent-when-offered, and reject choices; once decided, the prompt leaves the transcript and
+the decision shows once as a notice by the composer. Questions stay inline above the composer.
 
 `orca run "…"` is the non-interactive path: stable plain text for people, `--jsonl` for a
-versioned machine-readable stream, `--no-follow` to print the accepted run id and detach. It
-exits **2** after reporting an approval or a question, so an unattended process never appears to
-hang.
+versioned machine-readable stream, `--no-follow` to print the accepted run id and detach. Every
+line is flushed as it is written, so a pipe sees the run as it happens. Each JSONL row carries
+`version`, `type`, and for a `type` of `event` the wire facts unchanged: `seq`, `event_id`, `event`
+and `payload`.
+
+### Exit codes
+
+The exit code says how the run ended, so a script need not parse the output to find out:
+
+| Code | Meaning |
+|---|---|
+| `0` | The run completed; stdout is its answer. |
+| `1` | The run failed. The status and the backend's reason are on stderr; what the model said before it stopped is still on stdout. |
+| `2` | The run stopped for an approval or a question, reported and left for `orca` to answer, so an unattended process never appears to hang. |
+| `3` | The run was cancelled or blocked. Reported like a failure, told apart from one because it was somebody's decision. |
 
 A `/name` the menu lists as a skill of the workspace is sent as written, and the backend reads the
 skill's instructions as the request; anything after the name is what to apply them to.
 
 `orca --resume` opens on the recent conversations, to pick one up; `orca --thread <id>` opens one
-by id. `orca threads`, `orca auth login|status|logout`, and `orca server status|start|stop|restart`
-are the rest of the surface.
+by id, and `orca chat --thread <id>` is the same thing said in full; `orca run --thread <id> "…"`
+continues one without the screen. `orca threads`, `orca auth login|status|logout`, and
+`orca server status|start|stop|restart` are the rest of the surface.
 
 ---
 

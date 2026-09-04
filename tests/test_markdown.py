@@ -175,3 +175,17 @@ def test_rich_markdown_never_exceeds_the_requested_console_width(width: int) -> 
     console.print(answer_markdown(source))
 
     assert max(map(len, stream.getvalue().splitlines())) <= width
+
+
+def test_a_fence_with_an_info_string_does_not_close_an_open_block() -> None:
+    """CommonMark: a closing fence has nothing after it but space. A "```python" line
+    inside a "```" block is code, and used to close it, so the block's rest was rewritten
+    as flattened prose."""
+    source = "```\nline\n```python\n# H1 text. 1. a. 2. b\n```\n"
+
+    assert recover_flattened_markdown(source) == source
+
+    nested = "````md\nexample:\n```python\nprint(1)\n```\n````\n\n# A\n1. one. 2. two. 3. three\n"
+    recovered = recover_flattened_markdown(nested)
+    assert recovered.startswith("````md\nexample:\n```python\nprint(1)\n```\n````\n")
+    assert "1. one.\n2. two.\n3. three" in recovered

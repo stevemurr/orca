@@ -196,7 +196,7 @@ class HttpBackend:
                     workspace_id=binding.workspace_id,
                     title=request.message[:120],
                 )
-                thread_id = str(created_thread["thread_id"])
+                thread_id = _required(created_thread, "thread_id", "POST /threads")
             created = await self._client.create_run(
                 thread_id,
                 binding.workspace_id,
@@ -205,9 +205,12 @@ class HttpBackend:
                 approval_policy=request.policy or None,
                 idempotency_key=_new_identity("idem"),
             )
-        except (ApiError, KeyError) as exc:
+            # Inside the boundary: read on the return line, a `{}` reply leaked a bare
+            # `KeyError('run_id')` past the caller's `except BackendError`. (found 2026-09-04)
+            run_id = _required(created, "run_id", f"POST /threads/{thread_id}/runs")
+        except ApiError as exc:
             raise BackendError(str(exc)) from exc
-        return RunInfo(str(created["run_id"]), str(created.get("thread_id") or thread_id))
+        return RunInfo(run_id, str(created.get("thread_id") or thread_id))
 
     async def stream(
         self,
@@ -364,6 +367,15 @@ class HttpBackend:
             policies=self._policies,
             skills=binding.skills,
         )
+
+
+def _required(body: JsonObject, key: str, route: str) -> str:
+    """One field the contract says a reply carries, or the same complaint as any other
+    malformed response rather than the bare key name a `KeyError` prints."""
+    value = body.get(key)
+    if value is None or value == "":
+        raise BackendError(f"malformed_response: {route} did not return {key!r}.")
+    return str(value)
 
 
 def _choices(value: object) -> tuple[Choice, ...]:

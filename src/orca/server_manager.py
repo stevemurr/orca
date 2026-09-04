@@ -37,6 +37,7 @@ from orca.connection import (
 from orca.json_types import JsonValue
 from orca.process import (
     DetachedProcess,
+    ProcessError,
     process_exists,
     start_detached,
     stop_detached,
@@ -152,9 +153,27 @@ def child_environment(
 
 
 def _launch_argv(argv: list[str], *, host: str, port: int) -> list[str]:
+    """The configured command with `{host}` and `{port}` filled in.
+
+    Only those two literal tokens, by plain replacement: `str.format` treated every brace in
+    every item as a placeholder, so a command carrying a JSON literal (`{"a":1}`) or a regex
+    (`^a{2,3}$`) raised `KeyError` before anything was started. (found 2026-09-04)
+    """
     if any("{host}" in item or "{port}" in item for item in argv):
-        return [item.format(host=host, port=port) for item in argv]
+        return [item.replace("{host}", host).replace("{port}", str(port)) for item in argv]
     return [*argv, "--host", host, "--port", str(port)]
+
+
+def _signal_group(pgid: int, *, force: bool) -> None:
+    """Signal a recorded process group whether or not its leader is still alive.
+
+    Processes are started with `start_new_session=True`, so the group id is the leader's pid
+    and outlives the leader: a launcher that forks a worker and exits leaves the worker in
+    the group. Checking `process_exists(pid)` first, as `start()` and `stop()` used to, meant
+    that worker was never signalled and kept the port. `stop_detached` already suppresses
+    the "no such group" case, so this is safe to call blind. (found 2026-09-04)
+    """
+    stop_detached(DetachedProcess(pid=pgid, pgid=pgid), force=force)
 
 
 def can_manage(connection: Connection) -> bool:
@@ -383,6 +402,20 @@ class LocalServerManager:
             current = await self.status()
             if current.running:
                 return current
+            # A receipt whose process is still alive is a server, whether or not the probe
+            # got through to it just now. Launching another here overwrote that receipt with
+            # the new instance's, and the failure path then deleted it -- so a transient
+            # health miss orphaned a live server orca could no longer stop. (found 2026-09-04)
+            recorded = self._read_receipt()
+            if (
+                recorded is not None
+                and recorded.endpoint == self.connection.endpoint
+                and process_exists(recorded.pid)
+            ):
+                raise ManagedServerError(
+                    f"a server with pid {recorded.pid} still exists but is not healthy; "
+                    + f"wait for it, or `orca server stop` it, then inspect {self.log_path}"
+                )
 
             parts = urlsplit(self.connection.endpoint)
             host = parts.hostname or "127.0.0.1"
@@ -394,13 +427,18 @@ class LocalServerManager:
                     f"set {SERVER_COMMAND_ENV} to the command that starts your backend before "
                     + "asking orca to manage it"
                 )
-            process = await asyncio.to_thread(
-                start_detached,
-                _launch_argv(argv, host=host, port=port),
-                cwd=self.runtime,
-                output_path=self.log_path,
-                env_overrides=child_environment(self.connection, instance_id),
-            )
+            try:
+                process = await asyncio.to_thread(
+                    start_detached,
+                    _launch_argv(argv, host=host, port=port),
+                    cwd=self.runtime,
+                    output_path=self.log_path,
+                    env_overrides=child_environment(self.connection, instance_id),
+                )
+            except ProcessError as exc:
+                # A missing executable is a configuration mistake, and the CLI reports those
+                # as `ManagedServerError`; left as `ProcessError` it was a traceback.
+                raise ManagedServerError(str(exc)) from exc
             receipt = _Receipt(
                 endpoint=self.connection.endpoint,
                 instance_id=instance_id,
@@ -427,8 +465,7 @@ class LocalServerManager:
                     break
                 await asyncio.sleep(_POLL_S)
 
-            if process_exists(receipt.pid):
-                stop_detached(process, force=True)
+            _signal_group(process.pgid, force=True)
             self._remove_receipt(instance_id)
             detail = self._log_tail()
             suffix = f"\n{detail}" if detail else f"; see {self.log_path}"
@@ -449,6 +486,8 @@ class LocalServerManager:
             probe = await self._probe()
             if probe is None:
                 if not process_exists(receipt.pid):
+                    # The leader is gone, but the group it led may not be.
+                    _signal_group(receipt.pgid, force=True)
                     self._remove_receipt(receipt.instance_id)
                     return ManagedServerStatus(self.connection.endpoint, False, False)
                 raise ManagedServerError(

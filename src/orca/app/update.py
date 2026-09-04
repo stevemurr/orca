@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 import shlex
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import assert_never
 
@@ -61,7 +61,7 @@ from orca.backend import (
     Resume,
     Steer,
 )
-from orca.json_types import JsonObject
+from orca.json_types import JsonObject, JsonValue
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +152,11 @@ def reduce(state: AppState, action: Action) -> Transition:
                 "developer_events": (),
                 "folders": (),
                 "usage": None,
+                "submitting": False,
+                "adding_folder": False,
+                "orphaned_submission": state.submitting,
+                "run_started_at": 0.0,
+                "notices": (),
             }
             if action.reset_conversation
             else {}
@@ -215,49 +220,63 @@ def reduce(state: AppState, action: Action) -> Transition:
         )
         if not text and asked is None:
             return Transition(state)
-        parsed = parse_input(text)
         cleared = replace(state, composer_draft="")
+        if asked is not None:
+            # While the agent is waiting on an answer, what is typed is the answer -- even
+            # `/new` or `/help`, which the agent may well have asked about -- with one
+            # way out: exactly `/cancel` still cancels the run, since a person who cannot
+            # answer needs somewhere to go. A number picks one of the offered options;
+            # anything else, including nothing, is the answer as typed. The backend treats
+            # an empty answer as a real reply.
+            if text == "/cancel":
+                return reduce(cleared, CommandInvoked("cancel"))
+            return reduce(cleared, QuestionAnswered(_chosen_option(asked.options, text)))
+        parsed = parse_input(text)
         if parsed is not None:
             return reduce(cleared, CommandInvoked(parsed.name, parsed.argument))
-        if asked is not None:
-            # A number picks one of the offered options; anything else, including nothing,
-            # is the answer as typed. The backend treats an empty answer as a real reply.
-            return reduce(cleared, QuestionAnswered(_chosen_option(asked.options, text)))
         if state.active_run_id:
             return Transition(
                 cleared,
                 (SendRunCommand(state.active_run_id, Steer(text)),),
             )
+        if state.submitting:
+            return Transition(_notice(state, "The last message is still being sent.", "warning"))
+        if state.adding_folder and state.thread_id is None:
+            # The `/add` is making the thread. A message sent now would make a second
+            # one, and whichever answered last would win the conversation.
+            return Transition(
+                _notice(state, "Wait for the folder to be added before the first message.")
+            )
         return Transition(replace(cleared, submitting=True), (StartRun(text),))
     if isinstance(action, CommandInvoked):
         return _command(state, action.name, action.argument)
     if isinstance(action, RunAccepted):
-        turn = TurnState(run_id=action.run_id, status="queued")
-        return Transition(
-            replace(
-                state,
-                thread_id=action.thread_id,
-                active_run_id=action.run_id,
-                cursor=0,
-                run_status=RunStatus.QUEUED,
-                submitting=False,
-                turns=(*state.turns, turn),
-                interaction=None,
-                developer_cursor=0,
-                developer_events=(),
-                # A new turn is a new page: what was said about the last one has been read.
-                notices=(),
-                run_started_at=action.started_at,
-                clock=action.started_at,
+        if state.orphaned_submission and not state.submitting:
+            # The request it answers was sent from a conversation since left, by a
+            # workspace switch or a reconnect. Following it would splice a turn of the old
+            # conversation into the new one.
+            return Transition(
+                _notice(
+                    replace(state, orphaned_submission=False),
+                    "A run started for the conversation that was left; it was not followed.",
+                )
             )
-        )
+        return Transition(_accept_run(state, action))
     if isinstance(action, ClockTicked):
-        return Transition(replace(state, clock=action.now))
+        # A notice made before the clock was first read is stamped now, so it gets its
+        # full time from here; one whose time is up goes, so the tick has nothing to keep
+        # ticking for once the last of them is gone.
+        stamped = tuple(
+            replace(notice, shown_at=action.now) if notice.shown_at == 0 else notice
+            for notice in state.notices
+        )
+        kept = tuple(notice for notice in stamped if not notice.expired(action.now))
+        return Transition(replace(state, clock=action.now, notices=kept))
     if isinstance(action, OperationFailed):
-        failed = replace(state, submitting=False)
+        failed = replace(state, submitting=False, adding_folder=False)
         asked = state.interaction
-        if asked is not None and asked.kind == "approval" and asked.sending:
-            # The decision did not reach the backend; offer the choices again.
+        if asked is not None and asked.sending:
+            # The decision or answer did not reach the backend; offer the prompt again.
             failed = replace(failed, interaction=replace(asked, sending=False))
         return Transition(_notice(failed, action.message, "error"))
     if isinstance(action, EventReceived):
@@ -284,10 +303,7 @@ def reduce(state: AppState, action: Action) -> Transition:
             usage=None,
         )
         for run in action.runs:
-            replayed = reduce(
-                replayed,
-                RunAccepted(run.run_id, action.thread_id),
-            ).state
+            replayed = _accept_run(replayed, RunAccepted(run.run_id, action.thread_id))
             for item in run.events:
                 replayed = _event(replayed, item).state
             reported = _reported_run_status(run.status)
@@ -341,8 +357,12 @@ def reduce(state: AppState, action: Action) -> Transition:
         interaction = state.interaction
         if interaction is None or interaction.kind != "question" or not state.active_run_id:
             return Transition(_notice(state, "Nothing is awaiting an answer."))
+        if interaction.sending:
+            # An answer is on its way; a second, sent on top, would reach the backend
+            # after the question is gone and fail there. `question.resolved` ends this.
+            return Transition(state)
         return Transition(
-            state,
+            replace(state, interaction=replace(interaction, sending=True)),
             (
                 SendRunCommand(
                     state.active_run_id,
@@ -351,11 +371,23 @@ def reduce(state: AppState, action: Action) -> Transition:
             ),
         )
     if isinstance(action, FolderAdded):
+        settled = replace(state, adding_folder=False)
+        if state.thread_id is not None and action.thread_id != state.thread_id:
+            # The backend widened a thread that is not this one: the first message and
+            # the first `/add` crossed, and each made a thread. The conversation keeps
+            # the one its run is on; the folder is not reached from it.
+            return Transition(
+                _notice(
+                    settled,
+                    "The folder was added to another conversation; add it again.",
+                    "warning",
+                )
+            )
         added = [folder for folder in action.folders if folder not in state.folders]
         label = ", ".join(added) if added else "no change"
         return Transition(
             _notice(
-                replace(state, thread_id=action.thread_id, folders=action.folders),
+                replace(settled, thread_id=action.thread_id, folders=action.folders),
                 f"folder added: {label}",
             )
         )
@@ -385,45 +417,51 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
     if name == "help":
         return Transition(state, (OpenHelp(),))
     if name == "threads":
-        if state.active_run_id:
-            return Transition(
-                _notice(
-                    state,
-                    "Pause or finish the active run before switching conversations.",
-                    "warning",
-                )
-            )
+        if held := _held_by_run(state, "switching conversations"):
+            return Transition(_notice(state, held, "warning"))
         return Transition(state, (OpenThreads(),))
     if name == "quit":
         return Transition(state, (ExitApplication(),))
     if name == "new":
-        if state.active_run_id:
-            return Transition(
-                _notice(
-                    state,
-                    "Detach from the active run before starting a new conversation.",
-                    "warning",
-                )
-            )
+        if held := _held_by_run(state, "starting a new conversation"):
+            return Transition(_notice(state, held, "warning"))
+        # The same clean slate a loaded thread starts from: a status, a cursor or a
+        # prompt left over from the last run would be read as this conversation's.
         return Transition(
             replace(
                 state,
                 thread_id=None,
+                active_run_id=None,
+                cursor=0,
+                run_status=RunStatus.IDLE,
                 turns=(),
+                interaction=None,
                 view_stack=(ViewId.CONVERSATION,),
                 developer_cursor=0,
                 developer_events=(),
                 folders=(),
                 usage=None,
+                notices=(),
+                run_started_at=0.0,
+                adding_folder=False,
             )
         )
     if name == "add":
         if not argument:
             reach = ", ".join(state.folders) if state.folders else "the workspace only"
             return Transition(_notice(state, f"folders: {reach}"))
+        if state.submitting:
+            # The message on its way makes the thread; an add now would make another.
+            return Transition(
+                _notice(state, "Wait for the message to be sent before adding a folder.")
+            )
+        if state.adding_folder:
+            return Transition(_notice(state, "A folder is still being added."))
         # Allowed while a run is going: the backend tells the agent through its inbox and the
         # stream says so. Only the thread is needed, and the backend makes one if there is none.
-        return Transition(state, (AddFolder(state.thread_id, argument),))
+        return Transition(
+            replace(state, adding_folder=True), (AddFolder(state.thread_id, argument),)
+        )
     if name == "mode":
         return _choose(state, name, argument, state.mode, state.modes)
     if name == "permissions":
@@ -431,10 +469,8 @@ def _command(state: AppState, name: str, argument: str) -> Transition:
     if name == "workspace":
         if not argument:
             return Transition(_notice(state, f"workspace: {state.workspace_path or 'none'}"))
-        if state.active_run_id:
-            return Transition(
-                _notice(state, "The workspace cannot change while a run is active.", "warning")
-            )
+        if held := _held_by_run(state, "switching workspaces"):
+            return Transition(_notice(state, held, "warning"))
         return Transition(state, (SwitchWorkspace(argument),))
     if name == "tools":
         return Transition(replace(state, tools_expanded=not state.tools_expanded))
@@ -492,6 +528,10 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
     payload = event.payload
     kind = event.kind
     run_id = state.active_run_id or state.latest_run_id
+    if not run_id:
+        # No run to tell this about: the stream outlived the conversation it was for, as
+        # when a workspace switch reset it. A turn with no run id would be a ghost.
+        return Transition(state)
     state = _ensure_turn(state, run_id)
 
     if kind == "run.created":
@@ -572,8 +612,8 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         return Transition(_replace_latest_turn(state, turn))
 
     if kind == "plan.progress":
-        entries = payload.get("plan")
-        if not isinstance(entries, list):
+        entries = _sequence(payload, "plan")
+        if entries is None:
             return Transition(state)
         # Whole-list replacement, not an upsert: the event carries the model's complete current
         # checklist, so merging by step text would resurrect a step it deliberately dropped.
@@ -612,14 +652,13 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
 
     if kind == "approval.requested":
-        allowed = payload.get("allowed_decisions")
-        decisions = tuple(str(item) for item in allowed) if isinstance(allowed, list) else ()
+        decisions = tuple(str(item) for item in _sequence(payload, "allowed_decisions") or ())
         arguments = payload.get("arguments")
         command = ""
         snippets: tuple[Snippet, ...] = ()
         if isinstance(arguments, Mapping):
-            argv = arguments.get("argv")
-            if isinstance(argv, list):
+            argv = _sequence(arguments, "argv")
+            if argv is not None:
                 words = [item for item in argv if isinstance(item, str)]
                 if len(words) == len(argv):
                     command = shlex.join(words)
@@ -640,14 +679,12 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         )
 
     if kind == "question.requested":
-        offered = payload.get("options")
+        offered = _sequence(payload, "options") or ()
         interaction = InteractionState(
             kind="question",
             request_id=_string(payload, "question_id") or event.event_id,
             title=_string(payload, "prompt") or "The agent needs more information.",
-            options=tuple(str(item) for item in offered if str(item).strip())
-            if isinstance(offered, list)
-            else (),
+            options=tuple(str(item) for item in offered if str(item).strip()),
         )
         return Transition(
             replace(state, interaction=interaction, run_status=RunStatus.AWAITING_INPUT)
@@ -685,7 +722,8 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
             started_at=state.clock,
         )
         state = _replace_latest_turn(state, _with_agent(turn, agent))
-        return Transition(_note(state, "agent", f"{agent_id} started: {_one_line(agent.task)}"))
+        task = _one_line(agent.task) or "(no task)"
+        return Transition(_note(state, "agent", f"{agent_id} started: {task}"))
 
     if kind == "agent.said":
         agent_id = _string(payload, "agent_id")
@@ -716,8 +754,8 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
         state = _replace_latest_turn(state, _with_agent(turn, agent))
         if kind == "agent.finished":
             said = f"{agent_id} finished after {agent.turns} turns"
-            if agent.answer:
-                said += f": {_one_line(agent.answer)}"
+            if answer := _one_line(agent.answer):
+                said += f": {answer}"
         elif kind == "agent.failed":
             said = f"{agent_id} failed: {_string(payload, 'error') or 'no reason given'}"
         else:
@@ -805,6 +843,39 @@ def _event(state: AppState, event: TaskEvent) -> Transition:
     return Transition(state)
 
 
+def _accept_run(state: AppState, action: RunAccepted) -> AppState:
+    """Open a turn for a run the backend took: the one just sent, or one replayed."""
+    turn = TurnState(run_id=action.run_id, status="queued")
+    return replace(
+        state,
+        thread_id=action.thread_id,
+        active_run_id=action.run_id,
+        cursor=0,
+        run_status=RunStatus.QUEUED,
+        submitting=False,
+        orphaned_submission=False,
+        turns=(*state.turns, turn),
+        interaction=None,
+        developer_cursor=0,
+        developer_events=(),
+        # A new turn is a new page: what was said about the last one has been read.
+        notices=(),
+        run_started_at=action.started_at,
+        clock=action.started_at,
+    )
+
+
+def _held_by_run(state: AppState, doing: str) -> str:
+    """Why the conversation cannot be left right now, or empty when it can. Says what to do
+    about it: there is no detaching from a run, and pausing keeps it active, so the only
+    ways out are to let it finish or `/cancel` it."""
+    if state.active_run_id:
+        return f"Finish or /cancel the active run before {doing}."
+    if state.submitting:
+        return f"Wait for the message to be sent before {doing}."
+    return ""
+
+
 def _ensure_turn(state: AppState, run_id: str) -> AppState:
     if state.turns or not run_id:
         return state
@@ -888,7 +959,11 @@ def _detail(arguments: JsonObject) -> str:
 
 
 def _one_line(value: str, limit: int = 120) -> str:
-    first = value.strip().splitlines()[0]
+    """The first line of `value`, cut to `limit`; empty when there is nothing but space."""
+    lines = value.strip().splitlines()
+    if not lines:
+        return ""
+    first = lines[0].strip()
     return first if len(first) <= limit else first[: limit - 1] + "…"
 
 
@@ -917,19 +992,35 @@ def _snippets(arguments: JsonObject) -> tuple[Snippet, ...]:
     return ()
 
 
+#: The decisions two backends have used, in the order the words came: `allow` and `deny`
+#: from the first contract, `approve` and `reject` from the one the keys send now.
+_DECISION_LABELS = {
+    "allow": "Approved",
+    "approve": "Approved",
+    "allow_always": "Approved, and always from now on",
+    "approve_bash_always": "Approved, and always from now on",
+    "deny": "Rejected",
+    "reject": "Rejected",
+}
+
+
 def _decision_label(decision: str) -> str:
-    """The backend's decision word, as a person would say it. Unknown words pass through."""
-    return {
-        "allow": "Approved",
-        "allow_always": "Approved, and always from now on",
-        "deny": "Rejected",
-    }.get(decision, decision or "Decided")
+    """The backend's decision word, as a person would say it. A word not in the table is
+    said as prose -- `approve_reads_always` as `Approve reads always` -- rather than raw."""
+    if label := _DECISION_LABELS.get(decision):
+        return label
+    return decision.replace("_", " ").strip().capitalize() or "Decided"
 
 
 def _chosen_option(options: tuple[str, ...], text: str) -> str:
     """`2` means the second offered option; anything else is the answer as typed."""
-    if text.isdigit() and 1 <= int(text) <= len(options):
-        return options[int(text) - 1]
+    try:
+        number = int(text) if text.isdecimal() else 0
+    except ValueError:
+        # `isdecimal` is true of digits `int` does not read, `²` among them.
+        number = 0
+    if 1 <= number <= len(options):
+        return options[number - 1]
     return text
 
 
@@ -941,3 +1032,13 @@ def _notice(state: AppState, message: str, level: NoticeLevel = "info") -> AppSt
 def _string(payload: JsonObject, key: str) -> str:
     value = payload.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _sequence(payload: JsonObject, key: str) -> tuple[JsonValue, ...] | None:
+    """The array under `key`, or None when there is none. A wire array may arrive as a
+    tuple as well as a list -- `JsonValue` types it as a `Sequence` -- and a string is a
+    sequence too, which is why it is not one here."""
+    value = payload.get(key)
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+        return None
+    return tuple(value)

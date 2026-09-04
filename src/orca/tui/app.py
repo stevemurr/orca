@@ -10,9 +10,10 @@ from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.command import Provider
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.theme import Theme
 from textual.widgets import ContentSwitcher, Static, TextArea
+from textual.worker import Worker, WorkerState
 
 from orca.app.actions import (
     Action,
@@ -58,6 +59,7 @@ from orca.tui.render import (
     render_notice,
     render_plan,
 )
+from orca.tui.render.chrome import approval_keys
 from orca.tui.render.theme import (
     ACCENT,
     BACKGROUND,
@@ -93,6 +95,13 @@ ORCA_THEME = Theme(
 )
 
 
+class InteractionPane(VerticalScroll):
+    """The strip a question is asked in. It scrolls, so a long list of options is
+    reachable; it does not take the focus, so Tab from the composer goes where it went."""
+
+    can_focus: bool = False
+
+
 class OrcaApp(App[None]):
     """One cursor owner, one store, and multiple quiet terminal views."""
 
@@ -105,11 +114,14 @@ class OrcaApp(App[None]):
         Binding("ctrl+q", "quit", "Quit", show=False),
         Binding("ctrl+t", "toggle_tools", "Tool calls", show=False),
         # Priority, so they win over the composer while an approval waits: a person should
-        # not have to click into the input to answer. `check_action` switches them off the
-        # rest of the time, so a 1 typed into a message is still a 1.
-        Binding("1,y", "decide('approve')", "Approve", show=False, priority=True),
-        Binding("2", "decide('approve_bash_always')", "Always", show=False, priority=True),
-        Binding("3,n", "decide('reject')", "Reject", show=False, priority=True),
+        # not have to click into the input to answer. Which decision a key sends is the
+        # backend's to say -- `_approval_keys` reads its vocabulary -- so the bindings
+        # name keys, not decisions. `check_action` switches off the keys not offered, so
+        # a 1 typed into a message is still a 1.
+        *(
+            Binding(key, f"decide_key('{key}')", "Decide", show=False, priority=True)
+            for key in "123456789yn"
+        ),
     ]
     CSS: ClassVar[str] = """
     Screen {
@@ -185,12 +197,20 @@ class OrcaApp(App[None]):
         display: block;
     }
 
+    /* A pane that scrolls, and up to six tenths of the screen before it does: a question
+       with a dozen options used to be cut off at fourteen rows, its last options nowhere. */
     #interaction {
         width: 100%;
         height: auto;
-        max-height: 14;
+        max-height: 60%;
         padding: 0 1;
+        scrollbar-size-vertical: 1;
         display: none;
+    }
+
+    #interaction-body {
+        width: 100%;
+        height: auto;
     }
 
     #interaction.visible {
@@ -349,7 +369,8 @@ class OrcaApp(App[None]):
                 yield InspectorView(id=ViewId.INSPECTOR.value, classes="main-view")
                 yield AgentsView(id=ViewId.AGENTS.value, classes="main-view")
             yield Static(id="plan")
-            yield Static(id="interaction")
+            with InteractionPane(id="interaction"):
+                yield Static(id="interaction-body")
             yield Static(id="notice")
             yield Static(id="command-menu")
             with Horizontal(id="composer-frame"):
@@ -359,6 +380,10 @@ class OrcaApp(App[None]):
 
     def on_mount(self) -> None:
         self._shell_ready = True
+        # The model's clock starts at zero, and a notice is stamped with the clock as it
+        # is made. Read the clock before anything can make one -- a boot that fails does,
+        # at once -- so the first notices get their time from now, not from the epoch.
+        self.apply_model_action(ClockTicked(time.monotonic()))
         self.apply_model_action(ViewportChanged(self.size.width, self.size.height))
         # Fast enough for a shine to move; `_tick` slows itself when nothing needs that.
         _ = self.set_interval(0.08, self._tick)
@@ -513,7 +538,11 @@ class OrcaApp(App[None]):
             return
         asked = self.model.interaction
         if asked is not None and asked.kind == "approval":
-            self.apply_model_action(ApprovalDecided("reject"))
+            # Escape is the first no the backend offers; a vocabulary without one has
+            # no key for Escape, and the approval stays until a digit answers it.
+            refusal = self._approval_keys().get("escape")
+            if refusal is not None:
+                self.apply_model_action(ApprovalDecided(refusal))
             return
         if self.model.view is not ViewId.CONVERSATION:
             self.apply_model_action(Back())
@@ -524,15 +553,16 @@ class OrcaApp(App[None]):
     def action_toggle_tools(self) -> None:
         self.apply_model_action(CommandInvoked("tools"))
 
-    def action_decide(self, decision: str) -> None:
-        self.apply_model_action(ApprovalDecided(decision))
+    def action_decide_key(self, key: str) -> None:
+        decision = self._approval_keys().get(key)
+        if decision is not None:
+            self.apply_model_action(ApprovalDecided(decision))
 
     @override
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action != "decide":
+        if action != "decide_key":
             return True
-        offered = self._approval_keys().values()
-        return bool(parameters) and parameters[0] in offered
+        return bool(parameters) and parameters[0] in self._approval_keys()
 
     @override
     async def action_quit(self) -> None:
@@ -610,14 +640,14 @@ class OrcaApp(App[None]):
         plan.set_class(pinned is not None, "visible")
         plan.update(pinned or "")
 
-        interaction = self.query_one("#interaction", Static)
+        interaction = self.query_one("#interaction", InteractionPane)
         inline_interaction = (
-            render_interaction(self.model, width=max(1, width - 2))
+            render_interaction(self.model, width=max(1, width - 4))
             if self.model.interaction is not None and self.model.interaction.kind == "question"
             else None
         )
         interaction.set_class(inline_interaction is not None, "visible")
-        interaction.update(inline_interaction or "")
+        self.query_one("#interaction-body", Static).update(inline_interaction or "")
 
         composer = self.query_one(Composer)
         if self.model.composer_draft != self._reported_draft:
@@ -650,10 +680,26 @@ class OrcaApp(App[None]):
         asked = self.model.interaction
         if asked is None or asked.kind != "approval" or asked.sending:
             return {}
-        keys = {"1": "approve", "y": "approve", "3": "reject", "n": "reject", "escape": "reject"}
-        if "approve_bash_always" in asked.allowed_decisions:
-            keys["2"] = "approve_bash_always"
-        return keys
+        return approval_keys(asked.allowed_decisions)
+
+    @on(Worker.StateChanged)
+    def worker_state_changed(self, message: Worker.StateChanged) -> None:
+        """A worker that died of something other than a `BackendError`. The bodies catch
+        the backend's own errors and say them; anything else is a fault in orca or a
+        library under it, and used to die in silence -- the workers do not exit the app
+        -- leaving the shell waiting on it, the input disabled, for good. It is logged
+        in full, and told to the model as the same failure a backend error would be, so
+        booting or submitting is cleared and the person sees a line about it."""
+        if message.state is not WorkerState.ERROR:
+            return
+        worker = cast("Worker[object]", message.worker)
+        error = worker.error
+        self.log.error(f"worker {worker.name!r} failed: {error!r}")
+        words = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+        if worker.group == "bootstrap":
+            self.apply_model_action(ConnectFailed(words))
+        else:
+            self.apply_model_action(OperationFailed(words))
 
     @on(Composer.Decided)
     def composer_decided(self, message: Composer.Decided) -> None:
